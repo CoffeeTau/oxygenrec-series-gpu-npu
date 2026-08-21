@@ -73,6 +73,22 @@ class OxygenRECModelTest(unittest.TestCase):
         for row in generated.tolist():
             self.assertTrue(trie.contains(row))
 
+    def test_beam_search_returns_ranked_legal_paths(self):
+        from oxygenrec.sid import PrefixTrie
+
+        self.model.eval()
+        trie = PrefixTrie([(1, 2, 3), (1, 4, 5), (7, 8, 9)])
+        output = self.model.beam_search(
+            self.history, self.padding, trie, beam_width=2
+        )
+        self.assertEqual(tuple(output.semantic_ids.shape), (2, 2, 3))
+        self.assertEqual(tuple(output.scores.shape), (2, 2))
+        for ranking, scores in zip(
+            output.semantic_ids.tolist(), output.scores.tolist()
+        ):
+            self.assertTrue(all(trie.contains(row) for row in ranking))
+            self.assertGreaterEqual(scores[0], scores[1])
+
 
 if __name__ == "__main__":
     unittest.main()

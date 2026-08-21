@@ -80,9 +80,16 @@ def main() -> None:
     generated = restored.generate(history, padding, trie)
     if not all(trie.contains(row) for row in generated.tolist()):
         raise RuntimeError("constrained generation emitted an invalid SID")
+    beams = restored.beam_search(history, padding, trie, beam_width=2)
+    if not all(
+        trie.contains(path)
+        for ranking in beams.semantic_ids.tolist()
+        for path in ranking
+    ):
+        raise RuntimeError("constrained beam search emitted an invalid SID")
     print(
         f"OK device={device} loss={initial_loss:.6f}->{final_loss:.6f} "
-        f"generated={generated.tolist()}"
+        f"generated={generated.tolist()} beams={beams.semantic_ids.tolist()}"
     )
 
 

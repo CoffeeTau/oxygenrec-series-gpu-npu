@@ -62,6 +62,14 @@ class OxygenRECOutput:
     level_losses: tuple[Tensor, ...] | None = None
 
 
+@dataclass(frozen=True)
+class BeamSearchOutput:
+    """Ranked legal SID paths and cumulative log-probability scores."""
+
+    semantic_ids: Tensor  # [batch, beam, levels]
+    scores: Tensor  # [batch, beam]
+
+
 class OxygenRECModel(nn.Module):
     """Small Transformer encoder-decoder with one prediction head per SID level."""
 
@@ -282,6 +290,77 @@ class OxygenRECModel(nn.Module):
                 selected.append(allowed_tensor[best])
             generated = torch.cat((generated, torch.stack(selected).unsqueeze(1)), dim=1)
         return generated
+
+    @torch.no_grad()
+    def beam_search(
+        self,
+        history_sids: Tensor,
+        history_padding_mask: Tensor,
+        trie: PrefixTrie,
+        *,
+        beam_width: int,
+        instruction_ids: Tensor | None = None,
+    ) -> BeamSearchOutput:
+        """Reference constrained beam search with deterministic tie breaking."""
+
+        if beam_width < 1:
+            raise ValueError("beam_width must be positive")
+        self._validate_inputs(history_sids, history_padding_mask, None)
+        batch_size = history_sids.shape[0]
+        if instruction_ids is None:
+            instruction_ids = torch.zeros(
+                batch_size, dtype=torch.long, device=history_sids.device
+            )
+        if instruction_ids.shape != (batch_size,):
+            raise ValueError("instruction_ids must have shape [batch]")
+        memory = self._encode(history_sids, history_padding_mask)
+        all_paths: list[list[tuple[int, ...]]] = []
+        all_scores: list[list[float]] = []
+        for row in range(batch_size):
+            beams: list[tuple[tuple[int, ...], float]] = [((), 0.0)]
+            for level in range(self.config.sid_levels):
+                candidates: list[tuple[tuple[int, ...], float]] = []
+                for prefix, score in beams:
+                    prefix_tensor = torch.tensor(
+                        [prefix], dtype=torch.long, device=history_sids.device
+                    )
+                    hidden = self._decode(
+                        memory[row : row + 1],
+                        history_padding_mask[row : row + 1],
+                        instruction_ids[row : row + 1],
+                        prefix_tensor,
+                    )
+                    logits = self.prediction_heads[level](hidden[:, level + 1, :])
+                    log_probabilities = F.log_softmax(logits[0], dim=-1)
+                    allowed = trie.allowed_next(prefix)
+                    if not allowed:
+                        continue
+                    candidates.extend(
+                        (
+                            prefix + (code,),
+                            score + float(log_probabilities[code]),
+                        )
+                        for code in allowed
+                    )
+                if not candidates:
+                    raise ValueError("trie has no complete path for beam search")
+                candidates.sort(key=lambda item: (-item[1], item[0]))
+                beams = candidates[:beam_width]
+            all_paths.append([path for path, _ in beams])
+            all_scores.append([score for _, score in beams])
+
+        returned_beams = min(len(paths) for paths in all_paths)
+        paths_tensor = torch.tensor(
+            [paths[:returned_beams] for paths in all_paths],
+            dtype=torch.long,
+            device=history_sids.device,
+        )
+        scores_tensor = torch.tensor(
+            [scores[:returned_beams] for scores in all_scores],
+            dtype=torch.float32,
+            device=history_sids.device,
+        )
+        return BeamSearchOutput(paths_tensor, scores_tensor)
 
     def _validate_inputs(
         self,

@@ -37,9 +37,15 @@ Each SID level has an independent linear prediction head. The training loss is
 the weight-normalized sum of the three cross-entropies. Equal weights are the
 default; other values are explicit experiment assumptions.
 
-Greedy validation applies `PrefixTrie.allowed_next(prefix)` before every
-selection, so a generated three-code path must correspond to at least one item.
-Beam search is intentionally deferred until greedy correctness is validated.
+Greedy and reference beam-search validation apply
+`PrefixTrie.allowed_next(prefix)` before every selection, so a generated
+three-code path must correspond to at least one item. The reference beam search
+prioritizes correctness and deterministic ranking over throughput.
+
+Ranking evaluation maps every generated SID back through the same registry.
+For collisions, a candidate is a hit if the target belongs to the registry's
+explicit item set. The current next-item protocol has one relevant target, so
+Recall@K equals HR@K; MRR, NDCG, and legal-SID rate are also reported.
 
 ## Validation
 
@@ -59,3 +65,16 @@ python scripts/validate_toy_model.py --device cuda
 It checks forward/backward, single-batch overfit, an exact checkpoint logits
 round-trip, and PrefixTrie-constrained generation. GPU results should record the
 PyTorch build and device alongside the printed loss values.
+
+## L20 validation record
+
+Validated on the 8 x NVIDIA L20 server environment collected on 2026-08-21.
+The acceptance script was run on one CUDA device and reported:
+
+```text
+OK device=cuda loss=2.312395->0.002499 generated=[[1, 2, 3], [7, 8, 9]]
+```
+
+This confirms the toy-model CUDA forward/backward path, single-batch overfit,
+checkpoint logits round-trip, and constrained greedy decoding. It does not yet
+validate multi-GPU NCCL, real-data metrics, throughput, or GPU/NPU parity.

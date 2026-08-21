@@ -31,6 +31,7 @@ Implemented now:
 - a small dense Transformer encoder-decoder with level-aware SID embeddings;
 - three level-specific prediction heads and weighted next-token loss;
 - greedy PrefixTrie-constrained Semantic-ID decoding;
+- deterministic reference beam search and HR/Recall/MRR/NDCG evaluation;
 - dependency-free unit tests for these invariants.
 
 Planned next:
@@ -38,7 +39,7 @@ Planned next:
 1. approve and acquire a public benchmark dataset;
 2. item embedding import and residual K-means;
 3. toy-batch overfit and checkpoint round-trip on a PyTorch environment;
-4. constrained beam search and HR/Recall evaluation;
+4. connect beam search and ranking evaluation to a real validation split;
 5. instruction fusion, Q2I, and IGR;
 6. multi-scenario post-training and, only after dense validation, MoE.
 
