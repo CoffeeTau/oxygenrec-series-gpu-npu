@@ -1,0 +1,40 @@
+paper:
+  title: "OxygenREC: An Instruction-Following Generative Framework for E-commerce Recommendation"
+  version: "arXiv:2512.22386v2"
+  sha256: "ea9b888860e562bc54e8fe8d787c13a79ee8ff0ca5c9019b0fbe193257b9e003"
+
+reproduction_boundary:
+  claim: "paper-method reimplementation on a public-data approximate benchmark"
+  production_main_table_reproduction: false
+
+semantic_id:
+  levels: 3                # paper fact
+  codebook_width: 8192     # paper fact
+  embedding_dim: 256       # paper fact for the final item representation
+  collision_policy: "report_and_preserve"  # implementation choice
+  add_dedup_level: false   # not specified by OxygenREC
+  reference_backend: "pure_python_lloyd_kmeans"
+  scalable_backend: null   # choose FAISS or PyTorch after environment freeze
+  initialization: "seeded_kmeans_plus_plus"  # implementation choice
+
+phase1_defaults:
+  dataset: null            # RetailRocket is optional and CC BY-NC-SA 4.0
+  split_strategy: "global_timestamp_boundaries"
+  same_timestamp_history: "exclude"
+  cold_start_targets: "separate_evaluation"
+  short_history_length: null
+  long_history_length: null
+  igr_top_k: null
+  model_hidden_size: null
+  attention_heads: null
+  optimizer: null
+  learning_rate: null
+
+unknown_paper_values:
+  - q2i_adapter_dimension
+  - q2i_loss_weights
+  - behavior_loss_weights
+  - rq_kmeans_training_details
+  - sid_collision_resolution
+  - scenario_sampling_ratios
+  - reward_component_weights
