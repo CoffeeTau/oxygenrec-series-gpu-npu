@@ -25,8 +25,12 @@ phase1_defaults:
   short_history_length: null
   long_history_length: null
   igr_top_k: null
-  model_hidden_size: null
-  attention_heads: null
+  model_hidden_size: 128    # engineering default for the first dense toy model
+  attention_heads: 4       # engineering default, not a paper hyperparameter
+  encoder_layers: 2        # engineering default
+  decoder_layers: 2        # engineering default
+  feedforward_size: 512    # engineering default
+  dropout: 0.1             # engineering default
   optimizer: null
   learning_rate: null
 
