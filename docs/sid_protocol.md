@@ -138,3 +138,18 @@ collisions are attributed primarily to RQ capacity/optimization rather than
 exact duplicate proxy vectors. The next controlled run holds the item set near
 20K, increases width to 512, and changes initialization from random training
 vectors to seeded K-Means++.
+
+The width-512 K-Means++ run produced:
+
+```text
+represented_items=18733
+unique_vector_rate=1.000000
+mse=0.003906->0.001596
+collision_rate=0.444243
+```
+
+K-Means++ improved reconstruction slightly but worsened SID collisions. Because
+both width and initialization changed relative to the width-256 random run, the
+final SID decision uses a 2x2 controlled comparison. The two missing cells are
+width-256 K-Means++ and width-512 random, fitted from the already persisted,
+identical embedding matrix without rescanning data or retraining the recommender.

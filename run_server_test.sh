@@ -5,28 +5,10 @@ set -euo pipefail
 project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$project_dir"
 
-python scripts/fit_retailrocket_sid.py \
-  --events data/raw/retailrocket/events.csv \
-  --properties \
-    data/raw/retailrocket/item_properties_part1.csv \
-    data/raw/retailrocket/item_properties_part2.csv \
+python scripts/compare_rq_configs.py \
+  --input-dir data/processed/retailrocket_sid \
+  --output-dir data/processed/rq_comparison \
   --device cuda \
-  --max-items 20000 \
-  --dimension 256 \
-  --levels 3 \
-  --width 512 \
   --iterations 15 \
   --chunk-size 2048 \
-  --initialization kmeans++
-
-python scripts/train_retailrocket.py \
-  --events data/raw/retailrocket/events.csv \
-  --sid-registry data/processed/retailrocket_sid/sid_registry.json \
-  --output-dir checkpoints/retailrocket_rq_smoke \
-  --device cuda \
-  --max-history 20 \
-  --max-train-samples 10000 \
-  --max-validation-samples 50 \
-  --batch-size 128 \
-  --epochs 1 \
-  --beam-width 5
+  --seed 17
