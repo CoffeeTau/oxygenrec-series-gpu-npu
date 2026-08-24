@@ -153,3 +153,31 @@ both width and initialization changed relative to the width-256 random run, the
 final SID decision uses a 2x2 controlled comparison. The two missing cells are
 width-256 K-Means++ and width-512 random, fitted from the already persisted,
 identical embedding matrix without rescanning data or retraining the recommender.
+
+### Frozen Phase-1 proxy registry
+
+The completed 2x2 comparison is:
+
+| Width | Initialization | MSE | Colliding-item rate | Unique complete SIDs |
+|---:|---|---:|---:|---:|
+| 256 | random | 0.001671 | 0.211071 | not exported |
+| 256 | K-Means++ | 0.001678 | **0.203331** | **16449** |
+| 512 | random | **0.001584** | 0.325148 | 15001 |
+| 512 | K-Means++ | 0.001596 | 0.444243 | not exported |
+
+The Phase-1 public proxy freezes width 256 with seeded K-Means++ (`seed=17`).
+It is selected for the lowest observed colliding-item rate and highest observed
+complete-SID cardinality. The small MSE disadvantage is accepted because exact
+item recoverability is more important than proxy-vector reconstruction for the
+current generative benchmark.
+
+Its artifacts are stored on the server under:
+
+```text
+data/processed/rq_comparison/w256_kmeanspp/
+```
+
+The remaining 20.33% colliding-item rate is a documented limitation, not a
+paper-quality target. Ordinary K-Means width/initialization search stops here.
+Behavioral co-occurrence or a stronger multimodal encoder may be evaluated as a
+later tokenizer ablation without blocking instruction, Q2I, and IGR work.

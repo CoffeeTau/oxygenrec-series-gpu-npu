@@ -1,4 +1,4 @@
-"""Minimal dense encoder-decoder for the Phase-1 OxygenREC loop.
+"""Dense OxygenREC backbone with instruction conditioning, Q2I and IGR.
 
 The model consumes already-tokenized item Semantic IDs. Dataset code remains
 responsible for mapping item IDs through a versioned ``SIDRegistry`` so model
@@ -24,6 +24,13 @@ class OxygenRECConfig:
     sid_width: int
     sid_levels: int = 3
     instruction_vocab_size: int = 1
+    scenario_vocab_size: int = 1
+    instruction_feature_size: int = 0
+    q2i_dimension: int = 128
+    q2i_weight: float = 0.0
+    q2i_variance_weight: float = 0.01
+    q2i_decorrelation_weight: float = 0.01
+    igr_top_k: int = 0
     hidden_size: int = 128
     attention_heads: int = 4
     encoder_layers: int = 2
@@ -37,6 +44,8 @@ class OxygenRECConfig:
             "sid_width": self.sid_width,
             "sid_levels": self.sid_levels,
             "instruction_vocab_size": self.instruction_vocab_size,
+            "scenario_vocab_size": self.scenario_vocab_size,
+            "q2i_dimension": self.q2i_dimension,
             "hidden_size": self.hidden_size,
             "attention_heads": self.attention_heads,
             "encoder_layers": self.encoder_layers,
@@ -51,6 +60,11 @@ class OxygenRECConfig:
             raise ValueError("hidden_size must be divisible by attention_heads")
         if not 0.0 <= self.dropout < 1.0:
             raise ValueError("dropout must be in [0, 1)")
+        if self.instruction_feature_size < 0 or self.igr_top_k < 0:
+            raise ValueError("instruction_feature_size and igr_top_k cannot be negative")
+        for name in ("q2i_weight", "q2i_variance_weight", "q2i_decorrelation_weight"):
+            if getattr(self, name) < 0:
+                raise ValueError(f"{name} cannot be negative")
 
 
 @dataclass(frozen=True)
@@ -60,6 +74,11 @@ class OxygenRECOutput:
     logits: tuple[Tensor, ...]
     loss: Tensor | None = None
     level_losses: tuple[Tensor, ...] | None = None
+    ntp_loss: Tensor | None = None
+    q2i_loss: Tensor | None = None
+    q2i_alignment_loss: Tensor | None = None
+    igr_indices: Tensor | None = None
+    igr_scores: Tensor | None = None
 
 
 @dataclass(frozen=True)
@@ -81,14 +100,27 @@ class OxygenRECModel(nn.Module):
             for _ in range(config.sid_levels)
         )
         self.history_positions = nn.Embedding(
-            config.max_history_items, config.hidden_size
+            config.max_history_items + config.igr_top_k, config.hidden_size
         )
         self.instruction_embeddings = nn.Embedding(
             config.instruction_vocab_size, config.hidden_size
         )
+        self.scenario_embeddings = nn.Embedding(config.scenario_vocab_size, config.hidden_size)
+        self.instruction_feature_adapter = (
+            nn.Linear(config.instruction_feature_size, config.hidden_size)
+            if config.instruction_feature_size else None
+        )
+        self.query_adapter = nn.Sequential(
+            nn.Linear(config.hidden_size * 2, config.hidden_size), nn.GELU(),
+            nn.Linear(config.hidden_size, config.q2i_dimension),
+        )
+        self.item_adapter = nn.Sequential(
+            nn.Linear(config.hidden_size, config.hidden_size), nn.GELU(),
+            nn.Linear(config.hidden_size, config.q2i_dimension),
+        )
         self.bos_embedding = nn.Parameter(torch.empty(config.hidden_size))
         self.decoder_positions = nn.Embedding(
-            config.sid_levels + 1, config.hidden_size
+            config.sid_levels + 2, config.hidden_size
         )
 
         encoder_layer = nn.TransformerEncoderLayer(
@@ -132,6 +164,11 @@ class OxygenRECModel(nn.Module):
         *,
         target_sids: Tensor | None = None,
         instruction_ids: Tensor | None = None,
+        scenario_ids: Tensor | None = None,
+        instruction_features: Tensor | None = None,
+        trigger_sids: Tensor | None = None,
+        long_history_sids: Tensor | None = None,
+        long_history_padding_mask: Tensor | None = None,
         level_weights: Sequence[float] | Tensor | None = None,
     ) -> OxygenRECOutput:
         """Predict all SID levels with teacher forcing.
@@ -144,33 +181,46 @@ class OxygenRECModel(nn.Module):
 
         self._validate_inputs(history_sids, history_padding_mask, target_sids)
         batch_size = history_sids.shape[0]
-        if instruction_ids is None:
-            instruction_ids = torch.zeros(
-                batch_size, dtype=torch.long, device=history_sids.device
-            )
-        if instruction_ids.shape != (batch_size,):
-            raise ValueError("instruction_ids must have shape [batch]")
-
-        memory = self._encode(history_sids, history_padding_mask)
+        instruction_ids = self._default_ids(instruction_ids, batch_size, history_sids.device)
+        scenario_ids = self._default_ids(scenario_ids, batch_size, history_sids.device)
+        scenario_prompt, reasoning_prompt, query = self._instruction_prompt(
+            scenario_ids, instruction_ids, instruction_features, trigger_sids
+        )
+        encoder_sids, encoder_mask, igr_indices, igr_scores = self._augment_history(
+            history_sids, history_padding_mask, long_history_sids,
+            long_history_padding_mask, query
+        )
+        memory = self._encode(encoder_sids, encoder_mask)
         if target_sids is None:
             logits = self._autoregressive_logits(
-                memory, history_padding_mask, instruction_ids
+                memory, encoder_mask, scenario_prompt, reasoning_prompt
             )
-            return OxygenRECOutput(logits=logits)
+            return OxygenRECOutput(logits=logits, igr_indices=igr_indices, igr_scores=igr_scores)
         prefix = target_sids[:, :-1]
-        hidden = self._decode(memory, history_padding_mask, instruction_ids, prefix)
+        hidden = self._decode(memory, encoder_mask, scenario_prompt, reasoning_prompt, prefix)
         logits = tuple(
-            head(hidden[:, level + 1, :])
+            head(hidden[:, level + 2, :])
             for level, head in enumerate(self.prediction_heads)
         )
-        loss, level_losses = self.weighted_ntp_loss(logits, target_sids, level_weights)
-        return OxygenRECOutput(logits=logits, loss=loss, level_losses=level_losses)
+        ntp_loss, level_losses = self.weighted_ntp_loss(logits, target_sids, level_weights)
+        loss = ntp_loss
+        q2i_loss = alignment_loss = None
+        if self.config.q2i_weight > 0:
+            targets = F.normalize(self.item_adapter(self._item_embedding(target_sids)), dim=-1)
+            q2i_loss, alignment_loss = self.q2i_alignment_loss(query, targets)
+            loss = ntp_loss + self.config.q2i_weight * q2i_loss
+        return OxygenRECOutput(
+            logits=logits, loss=loss, level_losses=level_losses, ntp_loss=ntp_loss,
+            q2i_loss=q2i_loss, q2i_alignment_loss=alignment_loss,
+            igr_indices=igr_indices, igr_scores=igr_scores,
+        )
 
     def _autoregressive_logits(
         self,
         memory: Tensor,
         memory_padding_mask: Tensor,
-        instruction_ids: Tensor,
+        scenario_prompt: Tensor,
+        reasoning_prompt: Tensor,
     ) -> tuple[Tensor, ...]:
         prefix = torch.empty(
             (memory.shape[0], 0), dtype=torch.long, device=memory.device
@@ -178,9 +228,9 @@ class OxygenRECModel(nn.Module):
         outputs = []
         for level, head in enumerate(self.prediction_heads):
             hidden = self._decode(
-                memory, memory_padding_mask, instruction_ids, prefix
+                memory, memory_padding_mask, scenario_prompt, reasoning_prompt, prefix
             )
-            logits = head(hidden[:, level + 1, :])
+            logits = head(hidden[:, level + 2, :])
             outputs.append(logits)
             prefix = torch.cat((prefix, logits.argmax(dim=-1, keepdim=True)), dim=1)
         return tuple(outputs)
@@ -195,15 +245,79 @@ class OxygenRECModel(nn.Module):
         )
         return self.encoder(self.dropout(hidden), src_key_padding_mask=padding_mask)
 
+    def _item_embedding(self, sids: Tensor) -> Tensor:
+        return sum(
+            embedding(sids[..., level])
+            for level, embedding in enumerate(self.sid_embeddings)
+        )
+
+    @staticmethod
+    def _default_ids(ids: Tensor | None, batch_size: int, device: torch.device) -> Tensor:
+        if ids is None:
+            return torch.zeros(batch_size, dtype=torch.long, device=device)
+        if ids.shape != (batch_size,) or ids.dtype != torch.long:
+            raise ValueError("instruction/scenario IDs must be torch.long with shape [batch]")
+        return ids
+
+    def _instruction_prompt(
+        self, scenario_ids: Tensor, instruction_ids: Tensor,
+        instruction_features: Tensor | None, trigger_sids: Tensor | None,
+    ) -> tuple[Tensor, Tensor, Tensor]:
+        batch_size = scenario_ids.shape[0]
+        scenario = self.scenario_embeddings(scenario_ids)
+        if trigger_sids is not None:
+            if trigger_sids.shape != (batch_size, self.config.sid_levels):
+                raise ValueError("trigger_sids must have shape [batch, levels]")
+            scenario = scenario + self._item_embedding(trigger_sids)
+        if instruction_features is None:
+            reasoning = self.instruction_embeddings(instruction_ids)
+        else:
+            if self.instruction_feature_adapter is None:
+                raise ValueError("instruction_feature_size must be configured")
+            if instruction_features.shape != (batch_size, self.config.instruction_feature_size):
+                raise ValueError("instruction_features has the wrong shape")
+            reasoning = self.instruction_feature_adapter(instruction_features)
+        query = F.normalize(self.query_adapter(torch.cat((scenario, reasoning), dim=-1)), dim=-1)
+        return scenario, reasoning, query
+
+    def _augment_history(
+        self, short_sids: Tensor, short_mask: Tensor, long_sids: Tensor | None,
+        long_mask: Tensor | None, query: Tensor,
+    ) -> tuple[Tensor, Tensor, Tensor | None, Tensor | None]:
+        if long_sids is None:
+            if long_mask is not None:
+                raise ValueError("long_history_padding_mask requires long_history_sids")
+            return short_sids, short_mask, None, None
+        if self.config.igr_top_k < 1:
+            raise ValueError("igr_top_k must be positive when long history is provided")
+        if long_sids.ndim != 3 or long_sids.shape[0] != short_sids.shape[0] or long_sids.shape[2] != self.config.sid_levels:
+            raise ValueError("long_history_sids must have shape [batch, long_history, levels]")
+        if long_mask is None or long_mask.shape != long_sids.shape[:2] or long_mask.dtype != torch.bool:
+            raise ValueError("long_history_padding_mask must be boolean [batch, long_history]")
+        if ((~long_mask).sum(dim=1) < self.config.igr_top_k).any():
+            raise ValueError("each long history must contain at least igr_top_k valid items")
+        # The paper keeps the long-history branch frozen; retrieval therefore
+        # must not update either SID embeddings or the shared item adapter.
+        long_vectors = F.normalize(
+            self.item_adapter(self._item_embedding(long_sids)).detach(), dim=-1
+        )
+        scores = torch.einsum("bd,bhd->bh", query, long_vectors).masked_fill(long_mask, float("-inf"))
+        top_scores, top_indices = scores.topk(self.config.igr_top_k, dim=1)
+        gathered = long_sids.gather(1, top_indices.unsqueeze(-1).expand(-1, -1, self.config.sid_levels))
+        combined = torch.cat((short_sids, gathered), dim=1)
+        combined_mask = torch.cat((short_mask, torch.zeros_like(top_indices, dtype=torch.bool)), dim=1)
+        return combined, combined_mask, top_indices, top_scores
+
     def _decode(
         self,
         memory: Tensor,
         memory_padding_mask: Tensor,
-        instruction_ids: Tensor,
+        scenario_prompt: Tensor,
+        reasoning_prompt: Tensor,
         prefix_codes: Tensor | None,
     ) -> Tensor:
         batch_size = memory.shape[0]
-        tokens = [self.instruction_embeddings(instruction_ids)]
+        tokens = [scenario_prompt, reasoning_prompt]
         tokens.append(self.bos_embedding.unsqueeze(0).expand(batch_size, -1))
         if prefix_codes is not None:
             tokens.extend(
@@ -225,6 +339,29 @@ class OxygenRECModel(nn.Module):
             tgt_mask=causal_mask,
             memory_key_padding_mask=memory_padding_mask,
         )
+
+    def q2i_alignment_loss(self, queries: Tensor, targets: Tensor) -> tuple[Tensor, Tensor]:
+        """Cosine alignment with the paper's variance and decorrelation terms."""
+        if queries.shape != targets.shape or queries.ndim != 2:
+            raise ValueError("queries and targets must share shape [batch, dimension]")
+        batch_size = queries.shape[0]
+        alignment = -(queries * targets).sum(dim=-1).mean()
+        if batch_size < 2:
+            return alignment, alignment
+        variance_product = (
+            queries.var(dim=0, unbiased=False).mean()
+            * targets.var(dim=0, unbiased=False).mean()
+        ).clamp_min(1e-8)
+        variance = -torch.log(variance_product)
+        gram = queries @ queries.transpose(0, 1)
+        off_diagonal = gram.square().sum() - gram.diagonal().square().sum()
+        decorrelation = off_diagonal / (batch_size * batch_size - batch_size)
+        total = (
+            alignment
+            + self.config.q2i_variance_weight * variance
+            + self.config.q2i_decorrelation_weight * decorrelation
+        )
+        return total, alignment
 
     @staticmethod
     def weighted_ntp_loss(
@@ -259,24 +396,34 @@ class OxygenRECModel(nn.Module):
         trie: PrefixTrie,
         *,
         instruction_ids: Tensor | None = None,
+        scenario_ids: Tensor | None = None,
+        instruction_features: Tensor | None = None,
+        trigger_sids: Tensor | None = None,
+        long_history_sids: Tensor | None = None,
+        long_history_padding_mask: Tensor | None = None,
     ) -> Tensor:
         """Greedily generate legal three-level SIDs using ``PrefixTrie`` masks."""
 
         self._validate_inputs(history_sids, history_padding_mask, None)
         batch_size = history_sids.shape[0]
-        if instruction_ids is None:
-            instruction_ids = torch.zeros(
-                batch_size, dtype=torch.long, device=history_sids.device
-            )
-        memory = self._encode(history_sids, history_padding_mask)
+        instruction_ids = self._default_ids(instruction_ids, batch_size, history_sids.device)
+        scenario_ids = self._default_ids(scenario_ids, batch_size, history_sids.device)
+        scenario_prompt, reasoning_prompt, query = self._instruction_prompt(
+            scenario_ids, instruction_ids, instruction_features, trigger_sids
+        )
+        encoder_sids, encoder_mask, _, _ = self._augment_history(
+            history_sids, history_padding_mask, long_history_sids,
+            long_history_padding_mask, query
+        )
+        memory = self._encode(encoder_sids, encoder_mask)
         generated = torch.empty(
             (batch_size, 0), dtype=torch.long, device=history_sids.device
         )
         for level in range(self.config.sid_levels):
             hidden = self._decode(
-                memory, history_padding_mask, instruction_ids, generated
+                memory, encoder_mask, scenario_prompt, reasoning_prompt, generated
             )
-            logits = self.prediction_heads[level](hidden[:, level + 1, :])
+            logits = self.prediction_heads[level](hidden[:, level + 2, :])
             selected = []
             for row in range(batch_size):
                 prefix = tuple(int(code) for code in generated[row].tolist())
@@ -300,6 +447,11 @@ class OxygenRECModel(nn.Module):
         *,
         beam_width: int,
         instruction_ids: Tensor | None = None,
+        scenario_ids: Tensor | None = None,
+        instruction_features: Tensor | None = None,
+        trigger_sids: Tensor | None = None,
+        long_history_sids: Tensor | None = None,
+        long_history_padding_mask: Tensor | None = None,
     ) -> BeamSearchOutput:
         """Reference constrained beam search with deterministic tie breaking."""
 
@@ -307,13 +459,16 @@ class OxygenRECModel(nn.Module):
             raise ValueError("beam_width must be positive")
         self._validate_inputs(history_sids, history_padding_mask, None)
         batch_size = history_sids.shape[0]
-        if instruction_ids is None:
-            instruction_ids = torch.zeros(
-                batch_size, dtype=torch.long, device=history_sids.device
-            )
-        if instruction_ids.shape != (batch_size,):
-            raise ValueError("instruction_ids must have shape [batch]")
-        memory = self._encode(history_sids, history_padding_mask)
+        instruction_ids = self._default_ids(instruction_ids, batch_size, history_sids.device)
+        scenario_ids = self._default_ids(scenario_ids, batch_size, history_sids.device)
+        scenario_prompt, reasoning_prompt, query = self._instruction_prompt(
+            scenario_ids, instruction_ids, instruction_features, trigger_sids
+        )
+        encoder_sids, encoder_mask, _, _ = self._augment_history(
+            history_sids, history_padding_mask, long_history_sids,
+            long_history_padding_mask, query
+        )
+        memory = self._encode(encoder_sids, encoder_mask)
         all_paths: list[list[tuple[int, ...]]] = []
         all_scores: list[list[float]] = []
         for row in range(batch_size):
@@ -326,11 +481,12 @@ class OxygenRECModel(nn.Module):
                     )
                     hidden = self._decode(
                         memory[row : row + 1],
-                        history_padding_mask[row : row + 1],
-                        instruction_ids[row : row + 1],
+                        encoder_mask[row : row + 1],
+                        scenario_prompt[row : row + 1],
+                        reasoning_prompt[row : row + 1],
                         prefix_tensor,
                     )
-                    logits = self.prediction_heads[level](hidden[:, level + 1, :])
+                    logits = self.prediction_heads[level](hidden[:, level + 2, :])
                     log_probabilities = F.log_softmax(logits[0], dim=-1)
                     allowed = trie.allowed_next(prefix)
                     if not allowed:

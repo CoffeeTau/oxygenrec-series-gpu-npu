@@ -18,6 +18,12 @@ semantic_id:
   initialization: "seeded_kmeans_plus_plus"  # current controlled RQ experiment
   phase1_bootstrap: "frequency_selected_base_width_codes"  # plumbing only, non-semantic
   public_proxy_embedding: "latest_pre_cutoff_property_feature_hashing"
+  frozen_phase1_proxy:
+    width: 256
+    levels: 3
+    initialization: "seeded_kmeans_plus_plus"
+    seed: 17
+    status: "frozen_for_instruction_q2i_igr_development"
 
 phase1_defaults:
   dataset: null            # RetailRocket is optional and CC BY-NC-SA 4.0
