@@ -59,3 +59,40 @@ This is qualitative evidence that the real-data loading, bounded temporal
 sampling, CUDA optimization, epoch validation, and checkpoint path execute end
 to end. It is not yet evidence for semantic SID quality, final recommendation
 quality, multi-GPU scaling, or comparison with the OxygenREC paper tables.
+# RetailRocket Phase-2 ablations
+
+All variants use the same temporal split, SID registry, reservoir seed, model
+size, optimizer settings and evaluation code. Only the named method switches
+change. Formal comparisons must pass `--matched-igr-cohort`; this restricts
+Base and Instruction to the same IGR-eligible sample universe instead of giving
+them a different short-history population.
+
+| `--variant` | Scenario instruction | IGR | Q2I |
+|---|---:|---:|---:|
+| `base` | no | no | no |
+| `instruction` | target behavior scenario proxy | no | no |
+| `igr` | target behavior scenario proxy | yes | no |
+| `igr_q2i` | target behavior scenario proxy | yes | yes |
+
+For IGR variants, the most recent `--max-history` interactions form the short
+history. Up to `--long-history` immediately preceding interactions form a
+disjoint retrieval pool. A sample is eligible only when it contains at least
+`--igr-top-k` older known items, preventing padded entries from being retrieved.
+
+RetailRocket has no real query or generated contextual reasoning text. Its
+view/cart/transaction target type is therefore an explicit public-data scenario
+proxy, not a reproduction of the paper's private scenario instructions. Report
+the four variants as within-project ablations only.
+
+Example full commands share these flags and vary only `--variant` and output:
+
+```bash
+python scripts/train_retailrocket.py \
+  --events data/raw/retailrocket/events.csv \
+  --sid-registry data/processed/rq_comparison/w256_kmeanspp/sid_registry.json \
+  --device cuda --max-history 20 --long-history 100 --igr-top-k 10 \
+  --matched-igr-cohort \
+  --max-train-samples 100000 --max-validation-samples 100 \
+  --batch-size 128 --epochs 3 --beam-width 10 \
+  --variant igr_q2i --output-dir checkpoints/retailrocket_igr_q2i
+```

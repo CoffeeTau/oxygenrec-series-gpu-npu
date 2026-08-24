@@ -30,9 +30,9 @@ phase1_defaults:
   split_strategy: "global_timestamp_boundaries"
   same_timestamp_history: "exclude"
   cold_start_targets: "separate_evaluation"
-  short_history_length: null
-  long_history_length: null
-  igr_top_k: null
+  short_history_length: 20  # public benchmark engineering default
+  long_history_length: 100 # public benchmark engineering default
+  igr_top_k: 10            # paper value not disclosed; must be ablated
   model_hidden_size: 128    # engineering default for the first dense toy model
   attention_heads: 4       # engineering default, not a paper hyperparameter
   encoder_layers: 2        # engineering default
@@ -41,6 +41,14 @@ phase1_defaults:
   dropout: 0.1             # engineering default
   optimizer: null
   learning_rate: null
+
+phase2_instruction:
+  scenario_source: "explicit scenario id with optional trigger SID"
+  contextual_instruction_source: "external dense feature or learnable fallback"
+  retailrocket_real_query_available: false
+  q2i_item_representation: "semantic-id embedding proxy"
+  long_history_branch: "detached"
+  synthetic_cuda_validation: "passed"
 
 unknown_paper_values:
   - q2i_adapter_dimension

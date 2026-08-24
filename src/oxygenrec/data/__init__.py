@@ -8,7 +8,12 @@ from .temporal import (
     build_next_item_samples,
     training_item_ids,
 )
-from .model_inputs import SIDModelBatch, build_sid_model_batch
+from .model_inputs import (
+    LongShortSIDModelBatch,
+    SIDModelBatch,
+    build_long_short_sid_model_batch,
+    build_sid_model_batch,
+)
 from .bootstrap import build_frequency_bootstrap_registry
 
 __all__ = [
@@ -16,10 +21,12 @@ __all__ = [
     "InteractionEvent",
     "NextItemSample",
     "SIDModelBatch",
+    "LongShortSIDModelBatch",
     "Split",
     "TemporalBoundaries",
     "build_next_item_samples",
     "build_sid_model_batch",
+    "build_long_short_sid_model_batch",
     "build_frequency_bootstrap_registry",
     "load_retailrocket_events",
     "training_item_ids",

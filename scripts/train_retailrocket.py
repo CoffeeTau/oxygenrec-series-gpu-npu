@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Train the Phase-1 dense model on a bounded RetailRocket experiment."""
+"""Train controlled OxygenREC ablations on bounded RetailRocket data."""
 
 from __future__ import annotations
 
@@ -18,6 +18,7 @@ from oxygenrec.data import (
     Split,
     TemporalBoundaries,
     build_frequency_bootstrap_registry,
+    build_long_short_sid_model_batch,
     build_next_item_samples,
     build_sid_model_batch,
     load_retailrocket_events,
@@ -43,6 +44,17 @@ def parse_args() -> argparse.Namespace:
         help="Use a fitted RQ registry instead of the temporary frequency bootstrap.",
     )
     parser.add_argument("--max-history", type=int, default=20)
+    parser.add_argument("--long-history", type=int, default=100)
+    parser.add_argument("--igr-top-k", type=int, default=10)
+    parser.add_argument(
+        "--variant", choices=("base", "instruction", "igr", "igr_q2i"),
+        default="base",
+    )
+    parser.add_argument("--q2i-weight", type=float, default=0.2)
+    parser.add_argument(
+        "--matched-igr-cohort", action="store_true",
+        help="Use the IGR-eligible sample universe for every ablation variant.",
+    )
     parser.add_argument("--max-train-samples", type=int, default=100_000)
     parser.add_argument("--max-validation-samples", type=int, default=100)
     parser.add_argument("--batch-size", type=int, default=128)
@@ -56,13 +68,35 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def tensor_batch(samples, registry, max_history, device):
-    batch = build_sid_model_batch(samples, registry, max_history_items=max_history)
-    return (
-        torch.tensor(batch.history_sids, dtype=torch.long, device=device),
-        torch.tensor(batch.history_padding_mask, dtype=torch.bool, device=device),
-        torch.tensor(batch.target_sids, dtype=torch.long, device=device),
-    )
+def tensor_batch(samples, registry, args, device):
+    uses_igr = args.variant in {"igr", "igr_q2i"}
+    if uses_igr:
+        batch = build_long_short_sid_model_batch(
+            samples, registry, short_history_items=args.max_history,
+            long_history_items=args.long_history,
+            minimum_long_history_items=args.igr_top_k,
+        )
+        return {
+            "history_sids": torch.tensor(batch.short_history_sids, dtype=torch.long, device=device),
+            "history_padding_mask": torch.tensor(batch.short_history_padding_mask, dtype=torch.bool, device=device),
+            "target_sids": torch.tensor(batch.target_sids, dtype=torch.long, device=device),
+            "scenario_ids": torch.tensor(batch.scenario_ids, dtype=torch.long, device=device),
+            "long_history_sids": torch.tensor(batch.long_history_sids, dtype=torch.long, device=device),
+            "long_history_padding_mask": torch.tensor(batch.long_history_padding_mask, dtype=torch.bool, device=device),
+        }
+    batch = build_sid_model_batch(samples, registry, max_history_items=args.max_history)
+    result = {
+        "history_sids": torch.tensor(batch.history_sids, dtype=torch.long, device=device),
+        "history_padding_mask": torch.tensor(batch.history_padding_mask, dtype=torch.bool, device=device),
+        "target_sids": torch.tensor(batch.target_sids, dtype=torch.long, device=device),
+    }
+    if args.variant == "instruction":
+        scenario = {"view": 0, "addtocart": 1, "transaction": 2}
+        result["scenario_ids"] = torch.tensor(
+            [scenario[sample.target.behavior.value] for sample in samples],
+            dtype=torch.long, device=device,
+        )
+    return result
 
 
 def chunks(items, size):
@@ -76,11 +110,11 @@ def validate(model, samples, registry, trie, args, device):
     predictions = []
     targets = []
     for sample_batch in chunks(samples, args.batch_size):
-        history, padding, _ = tensor_batch(
-            sample_batch, registry, args.max_history, device
-        )
+        batch = tensor_batch(sample_batch, registry, args, device)
+        batch.pop("target_sids")
         output = model.beam_search(
-            history, padding, trie, beam_width=args.beam_width
+            batch.pop("history_sids"), batch.pop("history_padding_mask"), trie,
+            beam_width=args.beam_width, **batch,
         )
         predictions.extend(output.semantic_ids.cpu().tolist())
         targets.extend(sample.target.item_id for sample in sample_batch)
@@ -91,6 +125,8 @@ def validate(model, samples, registry, trie, args, device):
 
 def main() -> int:
     args = parse_args()
+    if args.igr_top_k > args.long_history:
+        raise ValueError("igr-top-k cannot exceed long-history")
     if not args.events.is_file():
         raise FileNotFoundError(args.events)
     random.seed(args.seed)
@@ -119,10 +155,13 @@ def main() -> int:
     filtered_events = [event for event in events if event.item_id in in_vocabulary]
     del events
     print("stage=build_samples")
+    uses_igr = args.variant in {"igr", "igr_q2i"}
+    matched_cohort = uses_igr or args.matched_igr_cohort
     samples = build_next_item_samples(
         filtered_events,
         boundaries,
-        max_history=args.max_history,
+        min_history=args.max_history + args.igr_top_k if matched_cohort else 1,
+        max_history=(args.max_history + args.long_history) if matched_cohort else args.max_history,
         max_samples_per_split={
             Split.TRAIN: args.max_train_samples,
             Split.VALIDATION: args.max_validation_samples,
@@ -137,6 +176,10 @@ def main() -> int:
     validation_samples = by_split[Split.VALIDATION]
     if not train_samples or not validation_samples:
         raise RuntimeError("bounded experiment produced an empty train or validation split")
+    print(
+        f"stage=samples variant={args.variant} matched_cohort={matched_cohort} "
+        f"train={len(train_samples)} validation={len(validation_samples)}"
+    )
 
     config = OxygenRECConfig(
         sid_width=registry.width,
@@ -147,6 +190,9 @@ def main() -> int:
         decoder_layers=args.decoder_layers,
         feedforward_size=args.hidden_size * 4,
         max_history_items=args.max_history,
+        scenario_vocab_size=3 if args.variant != "base" else 1,
+        igr_top_k=args.igr_top_k if uses_igr else 0,
+        q2i_weight=args.q2i_weight if args.variant == "igr_q2i" else 0.0,
     )
     model = OxygenRECModel(config).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate)
@@ -158,16 +204,19 @@ def main() -> int:
         model.train()
         random.shuffle(train_samples)
         total_loss = 0.0
+        total_ntp_loss = 0.0
+        total_q2i_loss = 0.0
         batches = 0
         for sample_batch in chunks(train_samples, args.batch_size):
-            history, padding, targets = tensor_batch(
-                sample_batch, registry, args.max_history, device
-            )
+            batch = tensor_batch(sample_batch, registry, args, device)
             optimizer.zero_grad(set_to_none=True)
-            output = model(history, padding, target_sids=targets)
+            output = model(**batch)
             output.loss.backward()
             optimizer.step()
             total_loss += float(output.loss.detach())
+            total_ntp_loss += float(output.ntp_loss.detach())
+            if output.q2i_loss is not None:
+                total_q2i_loss += float(output.q2i_loss.detach())
             batches += 1
         metrics = validate(
             model, validation_samples, registry, trie, args, device
@@ -182,8 +231,13 @@ def main() -> int:
             "args": vars(args),
         }
         torch.save(checkpoint, args.output_dir / f"epoch-{epoch}.pt")
+        q2i_summary = (
+            f" q2i_loss={total_q2i_loss / batches:.6f}"
+            if args.variant == "igr_q2i" else ""
+        )
         print(
-            f"epoch={epoch} train_loss={total_loss / batches:.6f} "
+            f"variant={args.variant} epoch={epoch} train_loss={total_loss / batches:.6f} "
+            f"ntp_loss={total_ntp_loss / batches:.6f}{q2i_summary} "
             f"hr={dict(metrics.hit_rate)} mrr={metrics.mrr:.6f} "
             f"legal_sid_rate={metrics.legal_sid_rate:.6f}"
         )
