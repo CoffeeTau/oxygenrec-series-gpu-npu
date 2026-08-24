@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from collections import defaultdict
+from collections import Counter, defaultdict
 from dataclasses import dataclass
 from enum import Enum
-from typing import Iterable, Sequence
+import random
+from typing import Iterable, Mapping, Sequence
 
 from .events import Behavior, InteractionEvent
 
@@ -81,6 +82,8 @@ def build_next_item_samples(
     min_history: int = 1,
     max_history: int | None = None,
     require_target_in_training_items: bool = True,
+    max_samples_per_split: Mapping[Split, int] | None = None,
+    sample_seed: int = 0,
 ) -> list[NextItemSample]:
     """Build chronologically ordered samples without future-event leakage.
 
@@ -94,6 +97,9 @@ def build_next_item_samples(
         raise ValueError("min_history must be at least 1")
     if max_history is not None and max_history < min_history:
         raise ValueError("max_history must be at least min_history")
+    limits = dict(max_samples_per_split or {})
+    if any(limit < 1 for limit in limits.values()):
+        raise ValueError("max_samples_per_split limits must be positive")
 
     ordered_events = sorted(events)
     train_items = training_item_ids(ordered_events, boundaries)
@@ -103,6 +109,12 @@ def build_next_item_samples(
         by_user[event.user_id].append(event)
 
     samples: list[NextItemSample] = []
+    reservoirs: dict[Split, list[NextItemSample]] = defaultdict(list)
+    seen_by_split: Counter[Split] = Counter()
+    generators = {
+        split: random.Random(sample_seed + index)
+        for index, split in enumerate(Split)
+    }
     for user_id, user_events in sorted(by_user.items()):
         history: list[InteractionEvent] = []
         cursor = 0
@@ -123,17 +135,30 @@ def build_next_item_samples(
                         continue
                     if require_target_in_training_items and target.item_id not in train_items:
                         continue
-                    samples.append(
-                        NextItemSample(
-                            split=boundaries.split_for(target.timestamp_ms),
-                            user_id=user_id,
-                            history=tuple(selected_history),
-                            target=target,
-                        )
+                    sample = NextItemSample(
+                        split=boundaries.split_for(target.timestamp_ms),
+                        user_id=user_id,
+                        history=tuple(selected_history),
+                        target=target,
                     )
+                    if sample.split not in limits:
+                        samples.append(sample)
+                    else:
+                        seen_by_split[sample.split] += 1
+                        bucket = reservoirs[sample.split]
+                        limit = limits[sample.split]
+                        if len(bucket) < limit:
+                            bucket.append(sample)
+                        else:
+                            replacement = generators[sample.split].randrange(
+                                seen_by_split[sample.split]
+                            )
+                            if replacement < limit:
+                                bucket[replacement] = sample
 
             history.extend(same_time_events)
             cursor = group_end
 
+    for split in Split:
+        samples.extend(reservoirs[split])
     return samples
-

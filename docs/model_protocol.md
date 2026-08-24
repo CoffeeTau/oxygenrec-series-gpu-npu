@@ -78,3 +78,13 @@ OK device=cuda loss=2.312395->0.002499 generated=[[1, 2, 3], [7, 8, 9]]
 This confirms the toy-model CUDA forward/backward path, single-batch overfit,
 checkpoint logits round-trip, and constrained greedy decoding. It does not yet
 validate multi-GPU NCCL, real-data metrics, throughput, or GPU/NPU parity.
+
+The updated acceptance script also validated constrained beam search:
+
+```text
+beams=[[[1, 2, 3], [7, 8, 9]], [[7, 8, 9], [1, 2, 3]]]
+```
+
+Every returned candidate is a complete path in the toy `PrefixTrie`. This
+validates the reference beam-search control flow on CUDA, but not ranking
+quality on held-out interactions.

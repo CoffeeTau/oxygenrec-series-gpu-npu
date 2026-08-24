@@ -46,7 +46,8 @@ Planned next:
 See [the reuse survey](docs/reference_reuse.md) and
 [explicit implementation assumptions](configs/assumptions.yaml). The current
 model shapes, masks, loss, and validation commands are in
-[the Phase-1 model protocol](docs/model_protocol.md).
+[the Phase-1 model protocol](docs/model_protocol.md). The bounded real-data run
+is documented in [the training protocol](docs/training_protocol.md).
 
 ## Run the current tests
 

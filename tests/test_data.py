@@ -102,7 +102,26 @@ class TemporalSamplesTest(unittest.TestCase):
         samples = build_next_item_samples(events, self.boundaries, max_history=1)
         self.assertEqual([item.item_id for item in samples[-1].history], ["b"])
 
+    def test_split_caps_use_deterministic_reservoir_sampling(self):
+        events = [event(index, index, "u", str(index)) for index in range(1, 21)]
+        limits = {Split.TRAIN: 3}
+        first = build_next_item_samples(
+            events,
+            self.boundaries,
+            require_target_in_training_items=False,
+            max_samples_per_split=limits,
+            sample_seed=9,
+        )
+        second = build_next_item_samples(
+            events,
+            self.boundaries,
+            require_target_in_training_items=False,
+            max_samples_per_split=limits,
+            sample_seed=9,
+        )
+        self.assertEqual(len(first), 3)
+        self.assertEqual(first, second)
+
 
 if __name__ == "__main__":
     unittest.main()
-
