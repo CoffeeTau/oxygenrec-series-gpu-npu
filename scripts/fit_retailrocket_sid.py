@@ -97,6 +97,8 @@ def main() -> int:
         assignment_chunk_size=args.chunk_size,
     )
     model = fitter.fit(vectors)
+    unique_vector_count = int(np.unique(embeddings.vectors, axis=0).shape[0])
+    unique_vector_rate = unique_vector_count / embeddings.represented_item_count
     version = (
         f"retailrocket-property-hash-d{args.dimension}-cut{boundaries.train_end_ms}"
         f"-rq-l{args.levels}-w{args.width}-s{args.seed}"
@@ -130,6 +132,8 @@ def main() -> int:
             "dimension": args.dimension,
             "selected_items": embeddings.selected_item_count,
             "represented_items": embeddings.represented_item_count,
+            "unique_vectors": unique_vector_count,
+            "unique_vector_rate": unique_vector_rate,
             "retained_property_snapshots": embeddings.retained_snapshot_count,
             "scanned_property_rows": embeddings.scanned_row_count,
         },
@@ -148,6 +152,7 @@ def main() -> int:
     )
     print(
         f"OK represented_items={embeddings.represented_item_count} "
+        f"unique_vector_rate={unique_vector_rate:.6f} "
         f"shape={tuple(model.codebooks.shape)} "
         f"mse={baseline_mse:.6f}->{reconstruction_mse:.6f} "
         f"collision_rate={diagnostics.colliding_item_rate:.6f}"

@@ -103,3 +103,22 @@ Generated artifacts under `data/processed/retailrocket_sid/` are:
 - `rq_codebooks.pt`;
 - `sid_registry.json`;
 - `metadata.json` containing assumptions and aggregate diagnostics.
+
+### First property-proxy run
+
+The first bounded L20 run on 2026-08-24 completed tokenizer fitting and model
+training:
+
+```text
+represented_items=4808
+mse=0.003906->0.002105
+collision_rate=0.911606
+```
+
+The model epoch and loss completed normally, validating the fitted-registry
+integration. The 91.16% colliding-item rate is not acceptable for a promoted
+registry. The next controlled run increases selected items and codebook width,
+and records exact input-vector uniqueness. If collisions remain high while
+input uniqueness is high, RQ configuration/initialization is the main suspect;
+if input uniqueness is low, the public proxy representation needs behavioral
+co-occurrence features.

@@ -11,11 +11,11 @@ python scripts/fit_retailrocket_sid.py \
     data/raw/retailrocket/item_properties_part1.csv \
     data/raw/retailrocket/item_properties_part2.csv \
   --device cuda \
-  --max-items 5000 \
+  --max-items 20000 \
   --dimension 256 \
   --levels 3 \
-  --width 64 \
-  --iterations 10 \
+  --width 256 \
+  --iterations 15 \
   --chunk-size 2048
 
 python scripts/train_retailrocket.py \
@@ -24,8 +24,8 @@ python scripts/train_retailrocket.py \
   --output-dir checkpoints/retailrocket_rq_smoke \
   --device cuda \
   --max-history 20 \
-  --max-train-samples 2000 \
-  --max-validation-samples 20 \
+  --max-train-samples 10000 \
+  --max-validation-samples 50 \
   --batch-size 128 \
   --epochs 1 \
   --beam-width 5
