@@ -34,3 +34,15 @@ configuration, so they should not be shared without review.
 
 The next tokenizer milestone replaces the bootstrap registry with item vectors
 and scalable residual K-Means while keeping the same model/training interface.
+
+## L20 bounded-run validation
+
+The 100,000-sample configuration completed three epochs on the L20 server on
+2026-08-24. All three epoch summaries were produced and aggregate training loss
+decreased normally. Exact loss and metric values were not exported because of
+the server's information-security policy.
+
+This is qualitative evidence that the real-data loading, bounded temporal
+sampling, CUDA optimization, epoch validation, and checkpoint path execute end
+to end. It is not yet evidence for semantic SID quality, final recommendation
+quality, multi-GPU scaling, or comparison with the OxygenREC paper tables.

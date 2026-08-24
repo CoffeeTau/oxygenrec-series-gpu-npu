@@ -46,4 +46,21 @@ Every exported `SIDRegistry` must include a version tied to:
 
 A training or evaluation checkpoint must never silently load a registry with a
 different version.
+# Scalable PyTorch backend
+
+`TorchResidualKMeans` implements chunked accelerator distance assignment,
+Lloyd centroid updates, residual fitting, versioned tensor persistence, and
+`SIDRegistry` generation. Random train-vector initialization is an explicit
+engineering choice; it is not claimed as the paper's undisclosed initializer.
+
+Before fitting real item vectors, run:
+
+```bash
+bash run_server_test.sh
+```
+
+This synthetic CUDA smoke test validates three residual levels, chunked encode,
+reconstruction improvement, registry generation, and codebook save/load. CUDA
+`index_add_` may not be bitwise deterministic across devices even with a fixed
+seed; CPU determinism is covered separately by tests.
 
