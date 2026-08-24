@@ -160,6 +160,7 @@ class TorchResidualKMeans:
         tolerance: float = 1e-4,
         seed: int = 0,
         assignment_chunk_size: int = 4096,
+        initialization: str = "random",
     ) -> None:
         if levels < 1 or width < 1 or max_iterations < 1:
             raise ValueError("levels, width, and max_iterations must be positive")
@@ -171,6 +172,41 @@ class TorchResidualKMeans:
         self.tolerance = tolerance
         self.seed = seed
         self.assignment_chunk_size = assignment_chunk_size
+        if initialization not in {"random", "kmeans++"}:
+            raise ValueError("initialization must be 'random' or 'kmeans++'")
+        self.initialization = initialization
+
+    def _initialize(self, vectors: Tensor, *, level: int) -> Tensor:
+        generator = torch.Generator(device="cpu")
+        generator.manual_seed(self.seed + level)
+        if self.initialization == "random":
+            indices = torch.randperm(
+                vectors.shape[0], generator=generator, device="cpu"
+            )[: self.width]
+            return vectors[indices.to(vectors.device)].clone()
+
+        first = int(torch.randint(vectors.shape[0], (1,), generator=generator))
+        selected = [first]
+        closest = (vectors - vectors[first]).square().sum(dim=1)
+        for _ in range(1, self.width):
+            total = float(closest.sum())
+            if total <= 0.0:
+                selected_set = set(selected)
+                next_index = next(
+                    index for index in range(vectors.shape[0])
+                    if index not in selected_set
+                )
+            else:
+                next_index = int(
+                    torch.multinomial(
+                        closest.detach().cpu(), 1, generator=generator
+                    ).item()
+                )
+            selected.append(next_index)
+            distance = (vectors - vectors[next_index]).square().sum(dim=1)
+            closest = torch.minimum(closest, distance)
+        indices = torch.tensor(selected, dtype=torch.long, device=vectors.device)
+        return vectors[indices].clone()
 
     def fit(self, vectors: Tensor) -> TorchResidualKMeansModel:
         residuals = _validate_vectors(vectors, self.width)
@@ -178,12 +214,7 @@ class TorchResidualKMeans:
         residuals = residuals.to(device)
         codebooks = []
         for level in range(self.levels):
-            generator = torch.Generator(device="cpu")
-            generator.manual_seed(self.seed + level)
-            indices = torch.randperm(
-                residuals.shape[0], generator=generator, device="cpu"
-            )[: self.width].to(device)
-            centroids = residuals[indices].clone()
+            centroids = self._initialize(residuals, level=level)
             for _ in range(self.max_iterations):
                 assignments = _assign(
                     residuals, centroids, self.assignment_chunk_size

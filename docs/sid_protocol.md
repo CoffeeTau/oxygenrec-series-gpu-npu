@@ -51,8 +51,9 @@ different version.
 
 `TorchResidualKMeans` implements chunked accelerator distance assignment,
 Lloyd centroid updates, residual fitting, versioned tensor persistence, and
-`SIDRegistry` generation. Random train-vector initialization is an explicit
-engineering choice; it is not claimed as the paper's undisclosed initializer.
+`SIDRegistry` generation. It supports seeded random train-vector and seeded
+K-Means++ initialization. Both are engineering choices and neither is claimed
+as the paper's undisclosed initializer.
 
 Before fitting real item vectors, run:
 
@@ -122,3 +123,18 @@ and records exact input-vector uniqueness. If collisions remain high while
 input uniqueness is high, RQ configuration/initialization is the main suspect;
 if input uniqueness is low, the public proxy representation needs behavioral
 co-occurrence features.
+
+The width-256 controlled run produced:
+
+```text
+represented_items=18733
+unique_vector_rate=1.000000
+mse=0.003906->0.001671
+collision_rate=0.211071
+```
+
+Input vectors are completely unique and reconstruction improved, so remaining
+collisions are attributed primarily to RQ capacity/optimization rather than
+exact duplicate proxy vectors. The next controlled run holds the item set near
+20K, increases width to 512, and changes initialization from random training
+vectors to seeded K-Means++.

@@ -14,9 +14,10 @@ python scripts/fit_retailrocket_sid.py \
   --max-items 20000 \
   --dimension 256 \
   --levels 3 \
-  --width 256 \
+  --width 512 \
   --iterations 15 \
-  --chunk-size 2048
+  --chunk-size 2048 \
+  --initialization kmeans++
 
 python scripts/train_retailrocket.py \
   --events data/raw/retailrocket/events.csv \

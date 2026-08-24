@@ -43,6 +43,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--iterations", type=int, default=10)
     parser.add_argument("--chunk-size", type=int, default=2048)
     parser.add_argument("--seed", type=int, default=17)
+    parser.add_argument(
+        "--initialization", choices=("random", "kmeans++"), default="random"
+    )
     return parser.parse_args()
 
 
@@ -95,6 +98,7 @@ def main() -> int:
         max_iterations=args.iterations,
         seed=args.seed,
         assignment_chunk_size=args.chunk_size,
+        initialization=args.initialization,
     )
     model = fitter.fit(vectors)
     unique_vector_count = int(np.unique(embeddings.vectors, axis=0).shape[0])
@@ -102,6 +106,7 @@ def main() -> int:
     version = (
         f"retailrocket-property-hash-d{args.dimension}-cut{boundaries.train_end_ms}"
         f"-rq-l{args.levels}-w{args.width}-s{args.seed}"
+        f"-init{args.initialization}"
     )
     registry = model.registry_for(
         embeddings.item_ids,
@@ -142,6 +147,7 @@ def main() -> int:
             "width": args.width,
             "iterations": args.iterations,
             "seed": args.seed,
+            "initialization": args.initialization,
             "baseline_mse": baseline_mse,
             "reconstruction_mse": reconstruction_mse,
         },

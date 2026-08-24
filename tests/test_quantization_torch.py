@@ -49,3 +49,18 @@ class TorchResidualKMeansTest(unittest.TestCase):
         first = TorchResidualKMeans(**settings).fit(vectors)
         second = TorchResidualKMeans(**settings).fit(vectors)
         torch.testing.assert_close(first.codebooks, second.codebooks)
+
+    def test_kmeans_plus_plus_is_seed_deterministic(self):
+        from oxygenrec.quantization_torch import TorchResidualKMeans
+
+        vectors = torch.randn(32, 5, generator=torch.Generator().manual_seed(4))
+        settings = dict(
+            levels=2,
+            width=4,
+            max_iterations=4,
+            seed=12,
+            initialization="kmeans++",
+        )
+        first = TorchResidualKMeans(**settings).fit(vectors)
+        second = TorchResidualKMeans(**settings).fit(vectors)
+        torch.testing.assert_close(first.codebooks, second.codebooks)

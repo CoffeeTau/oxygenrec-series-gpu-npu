@@ -15,7 +15,7 @@ semantic_id:
   add_dedup_level: false   # not specified by OxygenREC
   reference_backend: "pure_python_lloyd_kmeans"
   scalable_backend: "chunked_pytorch_lloyd_kmeans"
-  initialization: "seeded_random_train_vectors"  # scalable backend choice
+  initialization: "seeded_kmeans_plus_plus"  # current controlled RQ experiment
   phase1_bootstrap: "frequency_selected_base_width_codes"  # plumbing only, non-semantic
   public_proxy_embedding: "latest_pre_cutoff_property_feature_hashing"
 
