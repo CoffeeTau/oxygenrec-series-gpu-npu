@@ -46,7 +46,8 @@ Every exported `SIDRegistry` must include a version tied to:
 
 A training or evaluation checkpoint must never silently load a registry with a
 different version.
-# Scalable PyTorch backend
+
+## Scalable PyTorch backend
 
 `TorchResidualKMeans` implements chunked accelerator distance assignment,
 Lloyd centroid updates, residual fitting, versioned tensor persistence, and
@@ -64,3 +65,41 @@ reconstruction improvement, registry generation, and codebook save/load. CUDA
 `index_add_` may not be bitwise deterministic across devices even with a fixed
 seed; CPU determinism is covered separately by tests.
 
+## L20 scalable-backend validation
+
+Validated on one L20 on 2026-08-24:
+
+```text
+OK device=cuda shape=(3, 8, 16) mse=0.927709->0.006996 collision_rate=0.884766
+```
+
+The reconstruction improvement validates the residual fitting path. The high
+collision rate is expected for this deliberately clustered synthetic fixture
+with width 8; it is not an acceptable target for the real item codebook. Real
+item fitting must report collision percentiles, colliding-item rate, prefix
+coverage, and load balance before its registry is approved.
+
+## RetailRocket public proxy representation
+
+`fit_retailrocket_sid.py` constructs a 256-dimensional public-data proxy:
+
+1. derive global train/validation cutoffs from `events.csv`;
+2. select frequent items visible strictly in the training interval;
+3. retain the latest property value for every `(item, property)` pair strictly
+   before the training cutoff across both property files;
+4. map `property=value` features into 256 dimensions using stable signed
+   BLAKE2b feature hashing;
+5. L2-normalize item vectors;
+6. fit and persist three residual codebooks and the version-matched registry;
+7. save reconstruction and SID diagnostics in `metadata.json`.
+
+This representation is deterministic and leak-resistant, but it is not the
+paper's multimodal Qwen3/CLIP/Q-Former representation. It validates the public
+benchmark and RQ interface before a stronger item encoder is integrated.
+
+Generated artifacts under `data/processed/retailrocket_sid/` are:
+
+- `item_embeddings.npy` and aligned `item_ids.txt`;
+- `rq_codebooks.pt`;
+- `sid_registry.json`;
+- `metadata.json` containing assumptions and aggregate diagnostics.

@@ -35,6 +35,19 @@ configuration, so they should not be shared without review.
 The next tokenizer milestone replaces the bootstrap registry with item vectors
 and scalable residual K-Means while keeping the same model/training interface.
 
+The training entrypoint accepts a fitted registry:
+
+```bash
+python scripts/train_retailrocket.py \
+  --events data/raw/retailrocket/events.csv \
+  --sid-registry data/processed/retailrocket_sid/sid_registry.json \
+  --device cuda
+```
+
+When `--sid-registry` is present, frequency bootstrap is bypassed completely.
+The registry controls model SID width/levels, event filtering, constrained
+decoding, checkpoint version metadata, and item-level evaluation.
+
 ## L20 bounded-run validation
 
 The 100,000-sample configuration completed three epochs on the L20 server on

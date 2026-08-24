@@ -14,9 +14,10 @@ semantic_id:
   collision_policy: "report_and_preserve"  # implementation choice
   add_dedup_level: false   # not specified by OxygenREC
   reference_backend: "pure_python_lloyd_kmeans"
-  scalable_backend: null   # choose FAISS or PyTorch after environment freeze
-  initialization: "seeded_kmeans_plus_plus"  # implementation choice
+  scalable_backend: "chunked_pytorch_lloyd_kmeans"
+  initialization: "seeded_random_train_vectors"  # scalable backend choice
   phase1_bootstrap: "frequency_selected_base_width_codes"  # plumbing only, non-semantic
+  public_proxy_embedding: "latest_pre_cutoff_property_feature_hashing"
 
 phase1_defaults:
   dataset: null            # RetailRocket is optional and CC BY-NC-SA 4.0

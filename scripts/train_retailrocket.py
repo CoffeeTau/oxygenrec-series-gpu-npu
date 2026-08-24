@@ -25,6 +25,7 @@ from oxygenrec.data import (
 from oxygenrec.evaluation import evaluate_sid_ranking
 from oxygenrec.model import OxygenRECConfig, OxygenRECModel
 from oxygenrec.sid import PrefixTrie
+from oxygenrec.sid import SIDRegistry
 
 
 def parse_args() -> argparse.Namespace:
@@ -35,6 +36,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=17)
     parser.add_argument("--max-items", type=int, default=50_000)
     parser.add_argument("--sid-width", type=int, default=64)
+    parser.add_argument(
+        "--sid-registry",
+        type=Path,
+        default=None,
+        help="Use a fitted RQ registry instead of the temporary frequency bootstrap.",
+    )
     parser.add_argument("--max-history", type=int, default=20)
     parser.add_argument("--max-train-samples", type=int, default=100_000)
     parser.add_argument("--max-validation-samples", type=int, default=100)
@@ -99,12 +106,15 @@ def main() -> int:
         train_end_ms=minimum + duration * 8 // 10,
         validation_end_ms=minimum + duration * 9 // 10,
     )
-    registry = build_frequency_bootstrap_registry(
-        events,
-        boundaries,
-        max_items=args.max_items,
-        width=args.sid_width,
-    )
+    if args.sid_registry is None:
+        registry = build_frequency_bootstrap_registry(
+            events,
+            boundaries,
+            max_items=args.max_items,
+            width=args.sid_width,
+        )
+    else:
+        registry = SIDRegistry.from_json(args.sid_registry)
     in_vocabulary = registry.item_to_sid
     filtered_events = [event for event in events if event.item_id in in_vocabulary]
     del events
