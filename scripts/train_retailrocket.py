@@ -71,6 +71,10 @@ def parse_args() -> argparse.Namespace:
         "--eval-only-checkpoint", type=Path, default=None,
         help="Load a checkpoint and run validation/retrieval diagnostics without training.",
     )
+    parser.add_argument(
+        "--retriever-init-checkpoint", type=Path, default=None,
+        help="Initialize SID/instruction/Q2I modules from a Q2I-only checkpoint.",
+    )
     return parser.parse_args()
 
 
@@ -260,6 +264,31 @@ def main() -> int:
         q2i_weight=args.q2i_weight if args.variant in {"q2i", "igr_q2i"} else 0.0,
     )
     model = OxygenRECModel(config).to(device)
+    if args.retriever_init_checkpoint is not None:
+        if args.variant not in {"igr", "igr_q2i"}:
+            raise ValueError("retriever initialization is only valid for IGR variants")
+        source = torch.load(
+            args.retriever_init_checkpoint, map_location=device, weights_only=False
+        )["model_state"]
+        prefixes = (
+            "sid_embeddings.", "instruction_embeddings.", "scenario_embeddings.",
+            "instruction_feature_adapter.", "query_adapter.", "item_adapter.",
+        )
+        current = model.state_dict()
+        transferred = {
+            name: tensor
+            for name, tensor in source.items()
+            if name.startswith(prefixes)
+            and name in current
+            and current[name].shape == tensor.shape
+        }
+        if not transferred:
+            raise RuntimeError("retriever init checkpoint has no compatible parameters")
+        incompatible = model.load_state_dict(transferred, strict=False)
+        print(
+            f"stage=retriever_init transferred_tensors={len(transferred)} "
+            f"missing_tensors={len(incompatible.missing_keys)}"
+        )
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate)
     args.output_dir.mkdir(parents=True, exist_ok=True)
     registry.to_json(args.output_dir / "sid_registry.json")
