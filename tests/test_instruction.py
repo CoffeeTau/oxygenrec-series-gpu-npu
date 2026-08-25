@@ -22,6 +22,7 @@ class InstructionQ2IIGRTest(unittest.TestCase):
             dropout=0.0, max_history_items=3, scenario_vocab_size=2,
             instruction_feature_size=6, q2i_dimension=8,
             q2i_weight=0.2, igr_top_k=2,
+            use_history_context_instruction=True,
         ))
         self.short = torch.tensor([[[1, 2, 3], [4, 5, 6]], [[2, 3, 4], [5, 6, 7]]])
         self.short_mask = torch.zeros(2, 2, dtype=torch.bool)
@@ -57,6 +58,17 @@ class InstructionQ2IIGRTest(unittest.TestCase):
         first = self.model(self.short, self.short_mask, instruction_features=zeros).logits
         second = self.model(self.short, self.short_mask, instruction_features=ones).logits
         self.assertFalse(torch.allclose(first[0], second[0]))
+
+    def test_history_context_ignores_padding_codes(self):
+        self.model.eval()
+        padding = self.short_mask.clone()
+        padding[0, 1] = True
+        changed = self.short.clone()
+        changed[0, 1] = torch.tensor([13, 14, 15])
+        first = self.model(self.short, padding, target_sids=self.targets).logits
+        second = self.model(changed, padding, target_sids=self.targets).logits
+        for left, right in zip(first, second):
+            torch.testing.assert_close(left[0], right[0])
 
 
 if __name__ == "__main__":

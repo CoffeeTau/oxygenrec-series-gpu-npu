@@ -26,6 +26,7 @@ class OxygenRECConfig:
     instruction_vocab_size: int = 1
     scenario_vocab_size: int = 1
     instruction_feature_size: int = 0
+    use_history_context_instruction: bool = False
     q2i_dimension: int = 128
     q2i_weight: float = 0.0
     q2i_variance_weight: float = 0.01
@@ -110,6 +111,9 @@ class OxygenRECModel(nn.Module):
             nn.Linear(config.instruction_feature_size, config.hidden_size)
             if config.instruction_feature_size else None
         )
+        self.history_context_adapter = nn.Sequential(
+            nn.Linear(config.hidden_size, config.hidden_size), nn.GELU()
+        )
         self.query_adapter = nn.Sequential(
             nn.Linear(config.hidden_size * 2, config.hidden_size), nn.GELU(),
             nn.Linear(config.hidden_size, config.q2i_dimension),
@@ -183,8 +187,10 @@ class OxygenRECModel(nn.Module):
         batch_size = history_sids.shape[0]
         instruction_ids = self._default_ids(instruction_ids, batch_size, history_sids.device)
         scenario_ids = self._default_ids(scenario_ids, batch_size, history_sids.device)
+        history_context = self._history_context(history_sids, history_padding_mask)
         scenario_prompt, reasoning_prompt, query = self._instruction_prompt(
-            scenario_ids, instruction_ids, instruction_features, trigger_sids
+            scenario_ids, instruction_ids, instruction_features, trigger_sids,
+            history_context,
         )
         encoder_sids, encoder_mask, igr_indices, igr_scores = self._augment_history(
             history_sids, history_padding_mask, long_history_sids,
@@ -262,6 +268,7 @@ class OxygenRECModel(nn.Module):
     def _instruction_prompt(
         self, scenario_ids: Tensor, instruction_ids: Tensor,
         instruction_features: Tensor | None, trigger_sids: Tensor | None,
+        history_context: Tensor | None = None,
     ) -> tuple[Tensor, Tensor, Tensor]:
         batch_size = scenario_ids.shape[0]
         scenario = self.scenario_embeddings(scenario_ids)
@@ -277,8 +284,18 @@ class OxygenRECModel(nn.Module):
             if instruction_features.shape != (batch_size, self.config.instruction_feature_size):
                 raise ValueError("instruction_features has the wrong shape")
             reasoning = self.instruction_feature_adapter(instruction_features)
+        if history_context is not None:
+            reasoning = reasoning + history_context
         query = F.normalize(self.query_adapter(torch.cat((scenario, reasoning), dim=-1)), dim=-1)
         return scenario, reasoning, query
+
+    def _history_context(self, history_sids: Tensor, padding_mask: Tensor) -> Tensor | None:
+        if not self.config.use_history_context_instruction:
+            return None
+        items = self._item_embedding(history_sids)
+        valid = (~padding_mask).unsqueeze(-1).to(items.dtype)
+        pooled = (items * valid).sum(dim=1) / valid.sum(dim=1).clamp_min(1.0)
+        return self.history_context_adapter(pooled)
 
     def _augment_history(
         self, short_sids: Tensor, short_mask: Tensor, long_sids: Tensor | None,
@@ -408,8 +425,10 @@ class OxygenRECModel(nn.Module):
         batch_size = history_sids.shape[0]
         instruction_ids = self._default_ids(instruction_ids, batch_size, history_sids.device)
         scenario_ids = self._default_ids(scenario_ids, batch_size, history_sids.device)
+        history_context = self._history_context(history_sids, history_padding_mask)
         scenario_prompt, reasoning_prompt, query = self._instruction_prompt(
-            scenario_ids, instruction_ids, instruction_features, trigger_sids
+            scenario_ids, instruction_ids, instruction_features, trigger_sids,
+            history_context,
         )
         encoder_sids, encoder_mask, _, _ = self._augment_history(
             history_sids, history_padding_mask, long_history_sids,
@@ -461,8 +480,10 @@ class OxygenRECModel(nn.Module):
         batch_size = history_sids.shape[0]
         instruction_ids = self._default_ids(instruction_ids, batch_size, history_sids.device)
         scenario_ids = self._default_ids(scenario_ids, batch_size, history_sids.device)
+        history_context = self._history_context(history_sids, history_padding_mask)
         scenario_prompt, reasoning_prompt, query = self._instruction_prompt(
-            scenario_ids, instruction_ids, instruction_features, trigger_sids
+            scenario_ids, instruction_ids, instruction_features, trigger_sids,
+            history_context,
         )
         encoder_sids, encoder_mask, _, _ = self._augment_history(
             history_sids, history_padding_mask, long_history_sids,

@@ -75,6 +75,10 @@ def parse_args() -> argparse.Namespace:
         "--retriever-init-checkpoint", type=Path, default=None,
         help="Initialize SID/instruction/Q2I modules from a Q2I-only checkpoint.",
     )
+    parser.add_argument(
+        "--history-context-instruction", action="store_true",
+        help="Add a masked short-history pooling proxy to reasoning instruction.",
+    )
     return parser.parse_args()
 
 
@@ -268,6 +272,7 @@ def main() -> int:
         scenario_vocab_size=3 if args.variant != "base" else 1,
         igr_top_k=args.igr_top_k if uses_igr else 0,
         q2i_weight=args.q2i_weight if args.variant in {"q2i", "igr_q2i"} else 0.0,
+        use_history_context_instruction=args.history_context_instruction,
     )
     model = OxygenRECModel(config).to(device)
     if args.retriever_init_checkpoint is not None:
@@ -279,6 +284,7 @@ def main() -> int:
         prefixes = (
             "sid_embeddings.", "instruction_embeddings.", "scenario_embeddings.",
             "instruction_feature_adapter.", "query_adapter.", "item_adapter.",
+            "history_context_adapter.",
         )
         current = model.state_dict()
         transferred = {
