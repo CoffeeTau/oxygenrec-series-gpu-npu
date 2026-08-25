@@ -48,7 +48,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--long-history", type=int, default=100)
     parser.add_argument("--igr-top-k", type=int, default=10)
     parser.add_argument(
-        "--variant", choices=("base", "instruction", "igr", "igr_q2i"),
+        "--variant", choices=("base", "instruction", "q2i", "igr", "igr_q2i"),
         default="base",
     )
     parser.add_argument("--q2i-weight", type=float, default=0.2)
@@ -91,7 +91,7 @@ def tensor_batch(samples, registry, args, device):
         "history_padding_mask": torch.tensor(batch.history_padding_mask, dtype=torch.bool, device=device),
         "target_sids": torch.tensor(batch.target_sids, dtype=torch.long, device=device),
     }
-    if args.variant == "instruction":
+    if args.variant in {"instruction", "q2i"}:
         scenario = {"view": 0, "addtocart": 1, "transaction": 2}
         result["scenario_ids"] = torch.tensor(
             [scenario[sample.target.behavior.value] for sample in samples],
@@ -110,9 +110,30 @@ def validate(model, samples, registry, trie, args, device):
     model.eval()
     predictions = []
     targets = []
+    repeat_eligible = 0
+    repeat_retrieved = 0
+    q2i_alignments = []
     for sample_batch in chunks(samples, args.batch_size):
         batch = tensor_batch(sample_batch, registry, args, device)
-        batch.pop("target_sids")
+        target_sids = batch.pop("target_sids")
+        if args.variant in {"igr", "igr_q2i"}:
+            diagnostic = model(target_sids=target_sids, **batch)
+            long_sids = batch["long_history_sids"]
+            long_mask = batch["long_history_padding_mask"]
+            selected = long_sids.gather(
+                1,
+                diagnostic.igr_indices.unsqueeze(-1).expand(
+                    -1, -1, long_sids.shape[-1]
+                ),
+            )
+            target_matches = (long_sids == target_sids.unsqueeze(1)).all(dim=-1) & ~long_mask
+            selected_matches = (selected == target_sids.unsqueeze(1)).all(dim=-1)
+            repeat_eligible += int(target_matches.any(dim=1).sum())
+            repeat_retrieved += int(
+                (target_matches.any(dim=1) & selected_matches.any(dim=1)).sum()
+            )
+            if diagnostic.q2i_alignment_loss is not None:
+                q2i_alignments.append(float(diagnostic.q2i_alignment_loss))
         output = model.beam_search(
             batch.pop("history_sids"), batch.pop("history_padding_mask"), trie,
             beam_width=args.beam_width, **batch,
@@ -121,7 +142,18 @@ def validate(model, samples, registry, trie, args, device):
         targets.extend(sample.target.item_id for sample in sample_batch)
     available = min(len(ranking) for ranking in predictions)
     ks = tuple(k for k in (1, 5, 10) if k <= available)
-    return evaluate_sid_ranking(predictions, targets, registry, ks=ks)
+    metrics = evaluate_sid_ranking(predictions, targets, registry, ks=ks)
+    retrieval = {
+        "repeat_eligible": repeat_eligible,
+        "repeat_retrieved": repeat_retrieved,
+        "repeat_recall": (
+            repeat_retrieved / repeat_eligible if repeat_eligible else None
+        ),
+        "q2i_alignment": (
+            sum(q2i_alignments) / len(q2i_alignments) if q2i_alignments else None
+        ),
+    }
+    return metrics, retrieval
 
 
 def main() -> int:
@@ -193,7 +225,7 @@ def main() -> int:
         max_history_items=args.max_history,
         scenario_vocab_size=3 if args.variant != "base" else 1,
         igr_top_k=args.igr_top_k if uses_igr else 0,
-        q2i_weight=args.q2i_weight if args.variant == "igr_q2i" else 0.0,
+        q2i_weight=args.q2i_weight if args.variant in {"q2i", "igr_q2i"} else 0.0,
     )
     model = OxygenRECModel(config).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate)
@@ -234,7 +266,7 @@ def main() -> int:
                 total_q2i_loss += float(output.q2i_loss.detach())
             max_loss_identity_error = max(max_loss_identity_error, identity_error)
             batches += 1
-        metrics = validate(
+        metrics, retrieval = validate(
             model, validation_samples, registry, trie, args, device
         )
         checkpoint = {
@@ -249,12 +281,12 @@ def main() -> int:
         torch.save(checkpoint, args.output_dir / f"epoch-{epoch}.pt")
         q2i_summary = (
             f" q2i_loss={total_q2i_loss / batches:.6f}"
-            if args.variant == "igr_q2i" else ""
+            if args.variant in {"q2i", "igr_q2i"} else ""
         )
         mean_loss = total_loss / batches
         mean_ntp_loss = total_ntp_loss / batches
         epoch_identity_error = 0.0
-        if args.variant == "igr_q2i":
+        if args.variant in {"q2i", "igr_q2i"}:
             mean_q2i_loss = total_q2i_loss / batches
             reconstructed = mean_ntp_loss + config.q2i_weight * mean_q2i_loss
             epoch_identity_error = abs(mean_loss - reconstructed)
@@ -271,7 +303,9 @@ def main() -> int:
             f"loss_identity_error={max_loss_identity_error:.3e} "
             f"epoch_identity_error={epoch_identity_error:.3e} "
             f"hr={dict(metrics.hit_rate)} mrr={metrics.mrr:.6f} "
-            f"legal_sid_rate={metrics.legal_sid_rate:.6f}"
+            f"legal_sid_rate={metrics.legal_sid_rate:.6f} "
+            f"repeat_recall={retrieval['repeat_recall']} "
+            f"repeat_eligible={retrieval['repeat_eligible']}"
         )
         epoch_records.append({
             "variant": args.variant,
@@ -281,7 +315,10 @@ def main() -> int:
             "validation_samples": len(validation_samples),
             "train_loss": mean_loss,
             "ntp_loss": mean_ntp_loss,
-            "q2i_loss": (total_q2i_loss / batches) if args.variant == "igr_q2i" else None,
+            "q2i_loss": (
+                total_q2i_loss / batches
+                if args.variant in {"q2i", "igr_q2i"} else None
+            ),
             "q2i_weight": config.q2i_weight,
             "loss_identity_error": max_loss_identity_error,
             "epoch_identity_error": epoch_identity_error,
@@ -289,6 +326,7 @@ def main() -> int:
             "mrr": metrics.mrr,
             "ndcg": metrics.ndcg,
             "legal_sid_rate": metrics.legal_sid_rate,
+            "retrieval": retrieval,
         })
         (args.output_dir / "metrics.jsonl").write_text(
             "".join(json.dumps(record, sort_keys=True) + "\n" for record in epoch_records),

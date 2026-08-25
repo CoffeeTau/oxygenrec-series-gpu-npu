@@ -48,6 +48,8 @@ See [the reuse survey](docs/reference_reuse.md) and
 model shapes, masks, loss, and validation commands are in
 [the Phase-1 model protocol](docs/model_protocol.md). The bounded real-data run
 is documented in [the training protocol](docs/training_protocol.md).
+中文总体进度见 [复现进度](复现进度.md)，逐次实验判断与修正过程见
+[复现实验日志](复现实验日志.md)。
 
 ## Run the current tests
 

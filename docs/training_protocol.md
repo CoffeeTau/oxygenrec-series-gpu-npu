@@ -71,6 +71,7 @@ them a different short-history population.
 |---|---:|---:|---:|
 | `base` | no | no | no |
 | `instruction` | target behavior scenario proxy | no | no |
+| `q2i` | target behavior scenario proxy | no | yes |
 | `igr` | target behavior scenario proxy | yes | no |
 | `igr_q2i` | target behavior scenario proxy | yes | yes |
 
@@ -88,6 +89,11 @@ Every output directory contains `metrics.jsonl`, rewritten atomically at each
 completed epoch from the current run. Multi-seed experiments are summarized by
 `scripts/summarize_ablations.py`; it reports final-epoch mean and sample standard
 deviation for HR@1, HR@5, MRR, NDCG and NTP loss, and writes `summary.json`.
+
+IGR runs additionally report `repeat_recall`: among validation targets whose
+SID already occurs in the older history pool, the fraction whose matching SID
+is selected by IGR top-k. Because the frozen registry preserves collisions,
+this is a SID-level retrieval diagnostic rather than exact item-level recall.
 
 Example full commands share these flags and vary only `--variant` and output:
 
