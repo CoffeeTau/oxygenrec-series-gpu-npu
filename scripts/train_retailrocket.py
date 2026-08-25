@@ -86,7 +86,7 @@ def tensor_batch(samples, registry, args, device):
             long_history_items=args.long_history,
             minimum_long_history_items=args.igr_top_k,
         )
-        return {
+        result = {
             "history_sids": torch.tensor(batch.short_history_sids, dtype=torch.long, device=device),
             "history_padding_mask": torch.tensor(batch.short_history_padding_mask, dtype=torch.bool, device=device),
             "target_sids": torch.tensor(batch.target_sids, dtype=torch.long, device=device),
@@ -94,6 +94,11 @@ def tensor_batch(samples, registry, args, device):
             "long_history_sids": torch.tensor(batch.long_history_sids, dtype=torch.long, device=device),
             "long_history_padding_mask": torch.tensor(batch.long_history_padding_mask, dtype=torch.bool, device=device),
         }
+        # RetailRocket has no textual contextual instruction. The most recent
+        # strictly-prior item is the paper-supported trigger-item proxy, making
+        # the query user/context dependent instead of one vector per behavior.
+        result["trigger_sids"] = result["history_sids"][:, -1, :]
+        return result
     batch = build_sid_model_batch(samples, registry, max_history_items=args.max_history)
     result = {
         "history_sids": torch.tensor(batch.history_sids, dtype=torch.long, device=device),
@@ -106,6 +111,7 @@ def tensor_batch(samples, registry, args, device):
             [scenario[sample.target.behavior.value] for sample in samples],
             dtype=torch.long, device=device,
         )
+        result["trigger_sids"] = result["history_sids"][:, -1, :]
     return result
 
 
