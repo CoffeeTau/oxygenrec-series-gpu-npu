@@ -6,7 +6,7 @@ project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$project_dir"
 
 experiment_root="checkpoints/retailrocket_retrieval_diagnostic"
-for variant in q2i igr igr_q2i; do
+for variant in igr igr_q2i; do
     python scripts/train_retailrocket.py \
       --events data/raw/retailrocket/events.csv \
       --sid-registry data/processed/rq_comparison/w256_kmeanspp/sid_registry.json \
@@ -20,7 +20,7 @@ for variant in q2i igr igr_q2i; do
       --max-train-samples 20000 \
       --max-validation-samples 500 \
       --batch-size 128 \
-      --epochs 2 \
       --beam-width 5 \
-      --output-dir "$experiment_root/$variant"
+      --output-dir "$experiment_root/$variant" \
+      --eval-only-checkpoint "$experiment_root/$variant/epoch-2.pt"
 done

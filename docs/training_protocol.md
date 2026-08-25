@@ -94,6 +94,10 @@ IGR runs additionally report `repeat_recall`: among validation targets whose
 SID already occurs in the older history pool, the fraction whose matching SID
 is selected by IGR top-k. Because the frozen registry preserves collisions,
 this is a SID-level retrieval diagnostic rather than exact item-level recall.
+The same eligible subset also reports an analytic uniform-without-replacement
+`repeat_random` expectation, a most-recent-top-k `repeat_recent` baseline, and
+`repeat_lift = repeat_recall / repeat_random`. A raw repeat recall is not
+interpretable without these baselines because one SID may occur multiple times.
 
 Example full commands share these flags and vary only `--variant` and output:
 

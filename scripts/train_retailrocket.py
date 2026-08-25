@@ -7,6 +7,7 @@ import argparse
 from collections import defaultdict
 from dataclasses import asdict
 import json
+import math
 from pathlib import Path
 import random
 import sys
@@ -66,6 +67,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--encoder-layers", type=int, default=2)
     parser.add_argument("--decoder-layers", type=int, default=2)
     parser.add_argument("--beam-width", type=int, default=10)
+    parser.add_argument(
+        "--eval-only-checkpoint", type=Path, default=None,
+        help="Load a checkpoint and run validation/retrieval diagnostics without training.",
+    )
     return parser.parse_args()
 
 
@@ -112,6 +117,8 @@ def validate(model, samples, registry, trie, args, device):
     targets = []
     repeat_eligible = 0
     repeat_retrieved = 0
+    repeat_recent_retrieved = 0
+    repeat_random_expected_hits = 0.0
     q2i_alignments = []
     for sample_batch in chunks(samples, args.batch_size):
         batch = tensor_batch(sample_batch, registry, args, device)
@@ -132,6 +139,21 @@ def validate(model, samples, registry, trie, args, device):
             repeat_retrieved += int(
                 (target_matches.any(dim=1) & selected_matches.any(dim=1)).sum()
             )
+            recent_matches = target_matches[:, -args.igr_top_k :].any(dim=1)
+            eligible_rows = target_matches.any(dim=1)
+            repeat_recent_retrieved += int((eligible_rows & recent_matches).sum())
+            for row in range(target_matches.shape[0]):
+                if not bool(eligible_rows[row]):
+                    continue
+                valid_count = int((~long_mask[row]).sum())
+                match_count = int(target_matches[row].sum())
+                misses = valid_count - match_count
+                miss_probability = (
+                    math.comb(misses, args.igr_top_k)
+                    / math.comb(valid_count, args.igr_top_k)
+                    if misses >= args.igr_top_k else 0.0
+                )
+                repeat_random_expected_hits += 1.0 - miss_probability
             if diagnostic.q2i_alignment_loss is not None:
                 q2i_alignments.append(float(diagnostic.q2i_alignment_loss))
         output = model.beam_search(
@@ -148,6 +170,16 @@ def validate(model, samples, registry, trie, args, device):
         "repeat_retrieved": repeat_retrieved,
         "repeat_recall": (
             repeat_retrieved / repeat_eligible if repeat_eligible else None
+        ),
+        "repeat_recent_recall": (
+            repeat_recent_retrieved / repeat_eligible if repeat_eligible else None
+        ),
+        "repeat_random_expected_recall": (
+            repeat_random_expected_hits / repeat_eligible if repeat_eligible else None
+        ),
+        "repeat_lift_over_random": (
+            (repeat_retrieved / repeat_random_expected_hits)
+            if repeat_random_expected_hits else None
         ),
         "q2i_alignment": (
             sum(q2i_alignments) / len(q2i_alignments) if q2i_alignments else None
@@ -234,6 +266,25 @@ def main() -> int:
     trie = PrefixTrie.from_registry(registry)
     epoch_records = []
 
+    if args.eval_only_checkpoint is not None:
+        checkpoint = torch.load(
+            args.eval_only_checkpoint, map_location=device, weights_only=False
+        )
+        model.load_state_dict(checkpoint["model_state"])
+        metrics, retrieval = validate(
+            model, validation_samples, registry, trie, args, device
+        )
+        print(
+            f"EVAL variant={args.variant} checkpoint_epoch={checkpoint['epoch']} "
+            f"hr={dict(metrics.hit_rate)} mrr={metrics.mrr:.6f} "
+            f"repeat_recall={retrieval['repeat_recall']} "
+            f"repeat_recent={retrieval['repeat_recent_recall']} "
+            f"repeat_random={retrieval['repeat_random_expected_recall']} "
+            f"repeat_lift={retrieval['repeat_lift_over_random']} "
+            f"repeat_eligible={retrieval['repeat_eligible']}"
+        )
+        return 0
+
     for epoch in range(1, args.epochs + 1):
         model.train()
         random.shuffle(train_samples)
@@ -305,6 +356,9 @@ def main() -> int:
             f"hr={dict(metrics.hit_rate)} mrr={metrics.mrr:.6f} "
             f"legal_sid_rate={metrics.legal_sid_rate:.6f} "
             f"repeat_recall={retrieval['repeat_recall']} "
+            f"repeat_recent={retrieval['repeat_recent_recall']} "
+            f"repeat_random={retrieval['repeat_random_expected_recall']} "
+            f"repeat_lift={retrieval['repeat_lift_over_random']} "
             f"repeat_eligible={retrieval['repeat_eligible']}"
         )
         epoch_records.append({
