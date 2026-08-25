@@ -206,17 +206,31 @@ def main() -> int:
         total_loss = 0.0
         total_ntp_loss = 0.0
         total_q2i_loss = 0.0
+        max_loss_identity_error = 0.0
         batches = 0
         for sample_batch in chunks(train_samples, args.batch_size):
             batch = tensor_batch(sample_batch, registry, args, device)
             optimizer.zero_grad(set_to_none=True)
             output = model(**batch)
+            expected_loss = output.ntp_loss
+            if output.q2i_loss is not None:
+                expected_loss = expected_loss + config.q2i_weight * output.q2i_loss
+            identity_error = float((output.loss - expected_loss).abs().detach())
+            if identity_error > 1e-5:
+                raise RuntimeError(
+                    "joint-loss identity failed: "
+                    f"loss={float(output.loss.detach()):.6f} "
+                    f"ntp={float(output.ntp_loss.detach()):.6f} "
+                    f"q2i={float(output.q2i_loss.detach()) if output.q2i_loss is not None else None} "
+                    f"weight={config.q2i_weight}"
+                )
             output.loss.backward()
             optimizer.step()
             total_loss += float(output.loss.detach())
             total_ntp_loss += float(output.ntp_loss.detach())
             if output.q2i_loss is not None:
                 total_q2i_loss += float(output.q2i_loss.detach())
+            max_loss_identity_error = max(max_loss_identity_error, identity_error)
             batches += 1
         metrics = validate(
             model, validation_samples, registry, trie, args, device
@@ -238,6 +252,8 @@ def main() -> int:
         print(
             f"variant={args.variant} epoch={epoch} train_loss={total_loss / batches:.6f} "
             f"ntp_loss={total_ntp_loss / batches:.6f}{q2i_summary} "
+            f"q2i_weight={config.q2i_weight:.6f} "
+            f"loss_identity_error={max_loss_identity_error:.3e} "
             f"hr={dict(metrics.hit_rate)} mrr={metrics.mrr:.6f} "
             f"legal_sid_rate={metrics.legal_sid_rate:.6f}"
         )
