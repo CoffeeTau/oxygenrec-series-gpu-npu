@@ -84,6 +84,11 @@ view/cart/transaction target type is therefore an explicit public-data scenario
 proxy, not a reproduction of the paper's private scenario instructions. Report
 the four variants as within-project ablations only.
 
+Every output directory contains `metrics.jsonl`, rewritten atomically at each
+completed epoch from the current run. Multi-seed experiments are summarized by
+`scripts/summarize_ablations.py`; it reports final-epoch mean and sample standard
+deviation for HR@1, HR@5, MRR, NDCG and NTP loss, and writes `summary.json`.
+
 Example full commands share these flags and vary only `--variant` and output:
 
 ```bash

@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 from collections import defaultdict
 from dataclasses import asdict
+import json
 from pathlib import Path
 import random
 import sys
@@ -199,6 +200,7 @@ def main() -> int:
     args.output_dir.mkdir(parents=True, exist_ok=True)
     registry.to_json(args.output_dir / "sid_registry.json")
     trie = PrefixTrie.from_registry(registry)
+    epoch_records = []
 
     for epoch in range(1, args.epochs + 1):
         model.train()
@@ -270,6 +272,27 @@ def main() -> int:
             f"epoch_identity_error={epoch_identity_error:.3e} "
             f"hr={dict(metrics.hit_rate)} mrr={metrics.mrr:.6f} "
             f"legal_sid_rate={metrics.legal_sid_rate:.6f}"
+        )
+        epoch_records.append({
+            "variant": args.variant,
+            "seed": args.seed,
+            "epoch": epoch,
+            "train_samples": len(train_samples),
+            "validation_samples": len(validation_samples),
+            "train_loss": mean_loss,
+            "ntp_loss": mean_ntp_loss,
+            "q2i_loss": (total_q2i_loss / batches) if args.variant == "igr_q2i" else None,
+            "q2i_weight": config.q2i_weight,
+            "loss_identity_error": max_loss_identity_error,
+            "epoch_identity_error": epoch_identity_error,
+            "hit_rate": dict(metrics.hit_rate),
+            "mrr": metrics.mrr,
+            "ndcg": metrics.ndcg,
+            "legal_sid_rate": metrics.legal_sid_rate,
+        })
+        (args.output_dir / "metrics.jsonl").write_text(
+            "".join(json.dumps(record, sort_keys=True) + "\n" for record in epoch_records),
+            encoding="utf-8",
         )
     return 0
 
