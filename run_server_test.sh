@@ -11,32 +11,14 @@ python scripts/train_retailrocket.py \
   --sid-registry data/processed/rq_comparison/w256_kmeanspp/sid_registry.json \
   --device cuda \
   --seed 17 \
-  --variant q2i \
-  --matched-igr-cohort \
-  --max-history 20 \
-  --long-history 50 \
-  --igr-top-k 5 \
-  --max-train-samples 20000 \
-  --max-validation-samples 500 \
-  --batch-size 128 \
-  --epochs 2 \
-  --beam-width 5 \
-  --output-dir "$experiment_root/q2i"
-
-python scripts/train_retailrocket.py \
-  --events data/raw/retailrocket/events.csv \
-  --sid-registry data/processed/rq_comparison/w256_kmeanspp/sid_registry.json \
-  --device cuda \
-  --seed 17 \
   --variant igr_q2i \
   --matched-igr-cohort \
   --max-history 20 \
   --long-history 50 \
   --igr-top-k 5 \
-  --max-train-samples 20000 \
-  --max-validation-samples 500 \
+  --max-train-samples 1 \
+  --max-validation-samples 2000 \
   --batch-size 128 \
-  --epochs 2 \
   --beam-width 5 \
-  --retriever-init-checkpoint "$experiment_root/q2i/epoch-2.pt" \
-  --output-dir "$experiment_root/igr_q2i"
+  --output-dir "$experiment_root/igr_q2i" \
+  --eval-only-checkpoint "$experiment_root/igr_q2i/epoch-2.pt"
