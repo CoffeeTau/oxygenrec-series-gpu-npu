@@ -249,11 +249,25 @@ def main() -> int:
             f" q2i_loss={total_q2i_loss / batches:.6f}"
             if args.variant == "igr_q2i" else ""
         )
+        mean_loss = total_loss / batches
+        mean_ntp_loss = total_ntp_loss / batches
+        epoch_identity_error = 0.0
+        if args.variant == "igr_q2i":
+            mean_q2i_loss = total_q2i_loss / batches
+            reconstructed = mean_ntp_loss + config.q2i_weight * mean_q2i_loss
+            epoch_identity_error = abs(mean_loss - reconstructed)
+            if epoch_identity_error > 1e-5:
+                raise RuntimeError(
+                    "epoch joint-loss identity failed: "
+                    f"loss={mean_loss:.6f} ntp={mean_ntp_loss:.6f} "
+                    f"q2i={mean_q2i_loss:.6f} weight={config.q2i_weight}"
+                )
         print(
-            f"variant={args.variant} epoch={epoch} train_loss={total_loss / batches:.6f} "
-            f"ntp_loss={total_ntp_loss / batches:.6f}{q2i_summary} "
+            f"variant={args.variant} epoch={epoch} train_loss={mean_loss:.6f} "
+            f"ntp_loss={mean_ntp_loss:.6f}{q2i_summary} "
             f"q2i_weight={config.q2i_weight:.6f} "
             f"loss_identity_error={max_loss_identity_error:.3e} "
+            f"epoch_identity_error={epoch_identity_error:.3e} "
             f"hr={dict(metrics.hit_rate)} mrr={metrics.mrr:.6f} "
             f"legal_sid_rate={metrics.legal_sid_rate:.6f}"
         )

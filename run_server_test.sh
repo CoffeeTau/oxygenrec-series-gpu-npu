@@ -19,4 +19,4 @@ python scripts/train_retailrocket.py \
   --batch-size 128 \
   --epochs 1 \
   --beam-width 5 \
-  --output-dir checkpoints/retailrocket_loss_identity_audit
+  --output-dir checkpoints/retailrocket_epoch_identity_audit
