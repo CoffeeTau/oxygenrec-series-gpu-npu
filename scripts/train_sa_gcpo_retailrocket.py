@@ -32,6 +32,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--checkpoint", type=Path)
     parser.add_argument("--sid-registry", type=Path)
     parser.add_argument("--device", default="cuda")
+    parser.add_argument(
+        "--sample-seed", type=int,
+        help="Override the checkpoint seed for cohort sampling and SA-GCPO updates.",
+    )
     parser.add_argument("--alignment-samples", type=int, default=200)
     parser.add_argument("--validation-samples", type=int, default=200)
     parser.add_argument("--batch-size", type=int, default=16)
@@ -157,7 +161,11 @@ def main() -> int:
     for parameter in old_policy.parameters():
         parameter.requires_grad_(False)
 
-    seed = int(checkpoint_arg(payload, "seed", 17))
+    seed = (
+        args.sample_seed
+        if args.sample_seed is not None
+        else int(checkpoint_arg(payload, "seed", 17))
+    )
     random.seed(seed)
     torch.manual_seed(seed)
     events = list(load_retailrocket_events(args.events))
@@ -276,7 +284,7 @@ def main() -> int:
     )
     unchanged = len(before_ranks) - improved - worsened
     output_path = args.output or checkpoint_path.parent / (
-        f"sa_gcpo-retailrocket-{args.target_injection}.pt"
+        f"sa_gcpo-retailrocket-{args.target_injection}-seed{seed}.pt"
     )
     torch.save({
         "model_state": policy.state_dict(),
@@ -286,12 +294,13 @@ def main() -> int:
         "validation_samples": len(validation),
         "updates": args.updates,
         "learning_rate": args.learning_rate,
+        "sample_seed": seed,
         "target_injection": args.target_injection,
         "objective_before": first_objective,
         "objective_after": last_objective,
     }, output_path)
     print(
-        f"OK device={device} checkpoint={checkpoint_path} variant={variant} "
+        f"OK device={device} checkpoint={checkpoint_path} variant={variant} seed={seed} "
         f"alignment={len(alignment)} heldout_validation={len(validation)} "
         f"alignment_target_coverage={covered} "
         f"target_injection={args.target_injection} injected_targets={injected} "
