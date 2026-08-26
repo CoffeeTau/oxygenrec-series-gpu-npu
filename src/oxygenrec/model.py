@@ -427,6 +427,43 @@ class OxygenRECModel(nn.Module):
         loss = sum(weight * item for weight, item in zip(weights, level_losses))
         return loss / weights.sum(), level_losses
 
+    def candidate_log_probs(
+        self,
+        history_sids: Tensor,
+        history_padding_mask: Tensor,
+        candidate_sids: Tensor,
+        *,
+        scenario_ids: Tensor | None = None,
+    ) -> Tensor:
+        """Teacher-force fixed rollout candidates and return [B,G,L] log-probs."""
+        if candidate_sids.ndim != 3:
+            raise ValueError("candidate_sids must have shape [batch, group, levels]")
+        batch, group, levels = candidate_sids.shape
+        if batch != history_sids.shape[0] or levels != self.config.sid_levels:
+            raise ValueError("candidate batch/levels do not match model inputs")
+        expanded_history = history_sids[:, None].expand(-1, group, -1, -1).reshape(
+            batch * group, history_sids.shape[1], levels
+        )
+        expanded_mask = history_padding_mask[:, None].expand(-1, group, -1).reshape(
+            batch * group, history_padding_mask.shape[1]
+        )
+        targets = candidate_sids.reshape(batch * group, levels)
+        expanded_scenarios = None
+        if scenario_ids is not None:
+            expanded_scenarios = scenario_ids[:, None].expand(-1, group).reshape(-1)
+        output = self(
+            expanded_history, expanded_mask, target_sids=targets,
+            scenario_ids=expanded_scenarios,
+        )
+        selected = []
+        for level, logits in enumerate(output.logits):
+            selected.append(
+                F.log_softmax(logits, dim=-1).gather(
+                    1, targets[:, level : level + 1]
+                ).squeeze(1)
+            )
+        return torch.stack(selected, dim=-1).reshape(batch, group, levels)
+
     @torch.no_grad()
     def generate(
         self,

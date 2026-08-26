@@ -5,4 +5,4 @@ set -euo pipefail
 project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$project_dir"
 
-python scripts/validate_sa_gcpo.py --device cuda
+python scripts/validate_sa_gcpo_rollout.py --device cuda
