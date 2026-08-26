@@ -8,6 +8,7 @@ cd "$project_dir"
 python scripts/train_sa_gcpo_retailrocket.py \
     --events data/raw/retailrocket/events.csv \
     --device cuda \
+    --alignment-samples 200 \
     --validation-samples 200 \
     --batch-size 16 \
     --beam-width 5 \

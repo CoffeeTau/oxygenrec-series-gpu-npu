@@ -32,6 +32,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--checkpoint", type=Path)
     parser.add_argument("--sid-registry", type=Path)
     parser.add_argument("--device", default="cuda")
+    parser.add_argument("--alignment-samples", type=int, default=200)
     parser.add_argument("--validation-samples", type=int, default=200)
     parser.add_argument("--batch-size", type=int, default=16)
     parser.add_argument("--beam-width", type=int, default=5)
@@ -131,8 +132,8 @@ def format_metrics(label, metrics) -> str:
 
 def main() -> int:
     args = parse_args()
-    if args.validation_samples < 1 or args.batch_size < 1 or args.beam_width < 2:
-        raise ValueError("validation-samples/batch-size must be positive and beam-width >= 2")
+    if min(args.alignment_samples, args.validation_samples, args.batch_size) < 1 or args.beam_width < 2:
+        raise ValueError("sample counts/batch-size must be positive and beam-width >= 2")
     checkpoint_path = args.checkpoint or latest_checkpoint()
     device = torch.device(args.device)
     payload = torch.load(checkpoint_path, map_location=device, weights_only=False)
@@ -174,30 +175,38 @@ def main() -> int:
         min_history=max_history + igr_top_k if matched else 1,
         max_history=max_history + long_history if matched else max_history,
         max_samples_per_split={
-            Split.TRAIN: 1, Split.VALIDATION: args.validation_samples, Split.TEST: 1,
+            Split.TRAIN: args.alignment_samples,
+            Split.VALIDATION: args.validation_samples,
+            Split.TEST: 1,
         },
         sample_seed=seed,
     )
     by_split = defaultdict(list)
     for sample in samples:
         by_split[sample.split].append(sample)
+    alignment = by_split[Split.TRAIN]
     validation = by_split[Split.VALIDATION]
-    if not validation:
-        raise RuntimeError("fixed validation cohort is empty")
-    batches = [
-        (validation[start:start + args.batch_size], make_batch(
-            validation[start:start + args.batch_size], registry, payload, device
-        ))
-        for start in range(0, len(validation), args.batch_size)
-    ]
+    if not alignment or not validation:
+        raise RuntimeError("alignment or held-out validation cohort is empty")
+
+    def tensor_batches(cohort):
+        return [
+            (cohort[start:start + args.batch_size], make_batch(
+                cohort[start:start + args.batch_size], registry, payload, device
+            ))
+            for start in range(0, len(cohort), args.batch_size)
+        ]
+
+    alignment_batches = tensor_batches(alignment)
+    validation_batches = tensor_batches(validation)
     trie = PrefixTrie.from_registry(registry)
-    before = evaluate(policy, batches, registry, trie, args.beam_width)
+    before = evaluate(policy, validation_batches, registry, trie, args.beam_width)
     optimizer = torch.optim.AdamW(policy.parameters(), lr=args.learning_rate)
     first_objective = last_objective = 0.0
     injected = 0
     covered = 0
     rollouts = []
-    for _, batch in batches:
+    for _, batch in alignment_batches:
         with torch.no_grad():
             candidates = old_policy.beam_search(
                 batch["history_sids"], batch["history_padding_mask"], trie,
@@ -239,11 +248,11 @@ def main() -> int:
             aligned.loss.backward()
             optimizer.step()
             objective_sum += float(aligned.objective.detach())
-        epoch_objective = objective_sum / len(batches)
+        epoch_objective = objective_sum / len(alignment_batches)
         if update == 0:
             first_objective = epoch_objective
         last_objective = epoch_objective
-    after = evaluate(policy, batches, registry, trie, args.beam_width)
+    after = evaluate(policy, validation_batches, registry, trie, args.beam_width)
     output_path = args.output or checkpoint_path.parent / (
         f"sa_gcpo-retailrocket-{args.target_injection}.pt"
     )
@@ -251,6 +260,7 @@ def main() -> int:
         "model_state": policy.state_dict(),
         "source_checkpoint": str(checkpoint_path),
         "sid_registry_version": registry.version,
+        "alignment_samples": len(alignment),
         "validation_samples": len(validation),
         "updates": args.updates,
         "learning_rate": args.learning_rate,
@@ -260,7 +270,8 @@ def main() -> int:
     }, output_path)
     print(
         f"OK device={device} checkpoint={checkpoint_path} variant={variant} "
-        f"validation={len(validation)} target_coverage={covered} "
+        f"alignment={len(alignment)} heldout_validation={len(validation)} "
+        f"alignment_target_coverage={covered} "
         f"target_injection={args.target_injection} injected_targets={injected} "
         f"objective={first_objective:.6f}->{last_objective:.6f} output={output_path}"
     )
