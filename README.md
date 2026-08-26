@@ -10,6 +10,12 @@ serving stack are unavailable. Results produced here must be described as:
 
 > OxygenREC paper-method reimplementation on a public-data approximate benchmark.
 
+This is also a transition project toward general LLM and Agentic Search work.
+Implementation and review prioritize transferable reasoning, retrieval,
+semantic alignment, policy optimization, and trajectory methods. Recommendation-
+specific SID tuning and industrial serving receive only enough work to validate
+their GPU control flow.
+
 ## Current milestone
 
 Phase 1 starts with the smallest auditable loop:
