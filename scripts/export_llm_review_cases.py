@@ -51,6 +51,62 @@ def reasoning_proxy(sample) -> dict:
     }
 
 
+def render_markdown(records: list[dict]) -> str:
+    lines = [
+        "# OxygenREC LLM 交叉链路样例 Review",
+        "",
+        "> 本报告用于人工检查 Reasoning -> Retrieval -> Alignment -> Generation。",
+        "> reasoning 是确定性公开代理；实际模型未调用 Slow LLM。",
+        "",
+    ]
+    for record in records:
+        target = record["target"]
+        proxy = record["reasoning_review_proxy"]
+        conditioning = record["actual_model_conditioning"]
+        igr = record["igr"]
+        lines.extend([
+            f"## {record['case_id']}", "",
+            f"- 匿名用户：`{record['anonymized_user']}`",
+            f"- 目标行为：`{target['behavior']}`",
+            f"- 目标 SID：`{target['sid']}`",
+            f"- Reasoning 类型：`{proxy['kind']}`",
+            f"- Review instruction：{proxy['instruction_zh']}",
+            f"- 模型实际 reasoning source：`{conditioning['reasoning_source']}`",
+            f"- Slow LLM 文本实际输入：`{conditioning['slow_llm_text_used']}`",
+            "",
+            "### 行为证据", "",
+            f"- 历史长度：{proxy['observations']['history_length']}",
+            f"- 行为计数：`{proxy['observations']['behavior_counts']}`",
+            f"- 最近高意图事件：{proxy['observations']['recent_high_intent_events']}",
+            f"- 重复商品种类：{proxy['observations']['repeated_item_kinds']}",
+            "", "### IGR Top-K", "",
+            "| rank | long index | score | selected SID |", "|---:|---:|---:|---|",
+        ])
+        for rank, (index, score, sid) in enumerate(zip(
+            igr["selected_long_history_indices"], igr["scores"],
+            igr["selected_sids"], strict=True,
+        ), start=1):
+            lines.append(f"| {rank} | {index} | {score:.6f} | `{sid}` |")
+        lines.extend([
+            "",
+            f"- IGR 是否取回目标 SID：`{igr['retrieved_target_sid']}`",
+            f"- Q2I alignment loss：`{record['q2i']['batch_alignment_loss']}`",
+            "", "### Constrained Beam", "",
+            "| rank | SID | score | legal | collision | target hit |",
+            "|---:|---|---:|---|---:|---|",
+        ])
+        for candidate in record["generation"]["beam"]:
+            lines.append(
+                f"| {candidate['rank']} | `{candidate['sid']}` | "
+                f"{candidate['score']:.6f} | {candidate['legal']} | "
+                f"{candidate['collision_size']} | {candidate['target_hit']} |"
+            )
+        lines.extend(["", "### 人工检查问题", ""])
+        lines.extend(f"- [ ] {question}" for question in record["review_questions"])
+        lines.extend(["", "---", ""])
+    return "\n".join(lines)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--events", type=Path, required=True)
@@ -178,9 +234,11 @@ def main() -> int:
         "".join(json.dumps(record, ensure_ascii=False) + "\n" for record in records),
         encoding="utf-8",
     )
+    markdown_path = args.output.with_suffix(".md")
+    markdown_path.write_text(render_markdown(records), encoding="utf-8")
     print(
         f"OK device={device} cases={len(records)} igr_repeat_hits={repeat_hits} "
-        f"beam_target_hits={beam_hits} output={args.output}"
+        f"beam_target_hits={beam_hits} jsonl={args.output} markdown={markdown_path}"
     )
     return 0
 
