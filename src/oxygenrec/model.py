@@ -433,7 +433,12 @@ class OxygenRECModel(nn.Module):
         history_padding_mask: Tensor,
         candidate_sids: Tensor,
         *,
+        instruction_ids: Tensor | None = None,
         scenario_ids: Tensor | None = None,
+        instruction_features: Tensor | None = None,
+        trigger_sids: Tensor | None = None,
+        long_history_sids: Tensor | None = None,
+        long_history_padding_mask: Tensor | None = None,
     ) -> Tensor:
         """Teacher-force fixed rollout candidates and return [B,G,L] log-probs."""
         if candidate_sids.ndim != 3:
@@ -448,12 +453,26 @@ class OxygenRECModel(nn.Module):
             batch * group, history_padding_mask.shape[1]
         )
         targets = candidate_sids.reshape(batch * group, levels)
-        expanded_scenarios = None
-        if scenario_ids is not None:
-            expanded_scenarios = scenario_ids[:, None].expand(-1, group).reshape(-1)
+        def expand_vector(value: Tensor | None) -> Tensor | None:
+            if value is None:
+                return None
+            return value[:, None].expand(-1, group).reshape(batch * group)
+
+        def expand_features(value: Tensor | None) -> Tensor | None:
+            if value is None:
+                return None
+            return value[:, None].expand(-1, group, *value.shape[1:]).reshape(
+                batch * group, *value.shape[1:]
+            )
+
         output = self(
             expanded_history, expanded_mask, target_sids=targets,
-            scenario_ids=expanded_scenarios,
+            instruction_ids=expand_vector(instruction_ids),
+            scenario_ids=expand_vector(scenario_ids),
+            instruction_features=expand_features(instruction_features),
+            trigger_sids=expand_features(trigger_sids),
+            long_history_sids=expand_features(long_history_sids),
+            long_history_padding_mask=expand_features(long_history_padding_mask),
         )
         selected = []
         for level, logits in enumerate(output.logits):
