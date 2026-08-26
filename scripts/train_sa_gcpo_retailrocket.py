@@ -120,7 +120,16 @@ def evaluate(model, batches, registry, trie, beam_width):
         targets.extend(sample.target.item_id for sample in samples)
     available = min(len(row) for row in predictions)
     ks = tuple(k for k in (1, 5, 10) if k <= available)
-    return evaluate_sid_ranking(predictions, targets, registry, ks=ks)
+    metrics = evaluate_sid_ranking(predictions, targets, registry, ks=ks)
+    ranks = []
+    for ranking, target in zip(predictions, targets, strict=True):
+        rank = 0
+        for index, sid in enumerate(ranking, start=1):
+            if target in registry.items_for(sid):
+                rank = index
+                break
+        ranks.append(rank)
+    return metrics, ranks
 
 
 def format_metrics(label, metrics) -> str:
@@ -200,7 +209,9 @@ def main() -> int:
     alignment_batches = tensor_batches(alignment)
     validation_batches = tensor_batches(validation)
     trie = PrefixTrie.from_registry(registry)
-    before = evaluate(policy, validation_batches, registry, trie, args.beam_width)
+    before, before_ranks = evaluate(
+        policy, validation_batches, registry, trie, args.beam_width
+    )
     optimizer = torch.optim.AdamW(policy.parameters(), lr=args.learning_rate)
     first_objective = last_objective = 0.0
     injected = 0
@@ -252,7 +263,18 @@ def main() -> int:
         if update == 0:
             first_objective = epoch_objective
         last_objective = epoch_objective
-    after = evaluate(policy, validation_batches, registry, trie, args.beam_width)
+    after, after_ranks = evaluate(
+        policy, validation_batches, registry, trie, args.beam_width
+    )
+    improved = sum(
+        after_rank > 0 and (before_rank == 0 or after_rank < before_rank)
+        for before_rank, after_rank in zip(before_ranks, after_ranks, strict=True)
+    )
+    worsened = sum(
+        before_rank > 0 and (after_rank == 0 or after_rank > before_rank)
+        for before_rank, after_rank in zip(before_ranks, after_ranks, strict=True)
+    )
+    unchanged = len(before_ranks) - improved - worsened
     output_path = args.output or checkpoint_path.parent / (
         f"sa_gcpo-retailrocket-{args.target_injection}.pt"
     )
@@ -277,6 +299,10 @@ def main() -> int:
     )
     print(format_metrics("before", before))
     print(format_metrics("after", after))
+    print(
+        f"paired_ranks improved={improved} worsened={worsened} "
+        f"unchanged={unchanged}"
+    )
     return 0
 
 

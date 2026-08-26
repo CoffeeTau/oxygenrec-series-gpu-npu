@@ -9,7 +9,7 @@ python scripts/train_sa_gcpo_retailrocket.py \
     --events data/raw/retailrocket/events.csv \
     --device cuda \
     --alignment-samples 200 \
-    --validation-samples 200 \
+    --validation-samples 1000 \
     --batch-size 16 \
     --beam-width 5 \
     --updates 20 \
