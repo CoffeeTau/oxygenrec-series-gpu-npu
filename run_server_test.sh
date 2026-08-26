@@ -9,14 +9,14 @@ for variant in base behavior; do
     python scripts/train_retailrocket.py \
         --events data/raw/retailrocket/events.csv \
         --sid-registry checkpoints/retailrocket_attention_context_instruction/igr_q2i/sid_registry.json \
-        --output-dir "checkpoints/retailrocket_behavior/${variant}" \
+        --output-dir "checkpoints/retailrocket_behavior/${variant}_eval" \
         --device cuda \
         --variant "$variant" \
         --seed 17 \
         --max-history 20 \
-        --max-train-samples 20000 \
+        --max-train-samples 1 \
         --max-validation-samples 1000 \
         --batch-size 128 \
-        --epochs 2 \
-        --beam-width 5
+        --beam-width 5 \
+        --eval-only-checkpoint "checkpoints/retailrocket_behavior/${variant}/epoch-2.pt"
 done

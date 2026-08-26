@@ -186,6 +186,24 @@ def validate(model, samples, registry, trie, args, device):
     available = min(len(ranking) for ranking in predictions)
     ks = tuple(k for k in (1, 5, 10) if k <= available)
     metrics = evaluate_sid_ranking(predictions, targets, registry, ks=ks)
+    behavior_metrics = {}
+    for behavior in ("view", "addtocart", "transaction"):
+        indices = [
+            index for index, sample in enumerate(samples)
+            if sample.target.behavior.value == behavior
+        ]
+        if not indices:
+            continue
+        subset = evaluate_sid_ranking(
+            [predictions[index] for index in indices],
+            [targets[index] for index in indices], registry, ks=ks,
+        )
+        behavior_metrics[behavior] = {
+            "count": subset.sample_count,
+            "hr": dict(subset.hit_rate),
+            "mrr": subset.mrr,
+            "ndcg": subset.ndcg,
+        }
     retrieval = {
         "repeat_eligible": repeat_eligible,
         "repeat_retrieved": repeat_retrieved,
@@ -205,6 +223,7 @@ def validate(model, samples, registry, trie, args, device):
         "q2i_alignment": (
             sum(q2i_alignments) / len(q2i_alignments) if q2i_alignments else None
         ),
+        "behavior_metrics": behavior_metrics,
     }
     return metrics, retrieval
 
@@ -332,7 +351,8 @@ def main() -> int:
             f"repeat_recent={retrieval['repeat_recent_recall']} "
             f"repeat_random={retrieval['repeat_random_expected_recall']} "
             f"repeat_lift={retrieval['repeat_lift_over_random']} "
-            f"repeat_eligible={retrieval['repeat_eligible']}"
+            f"repeat_eligible={retrieval['repeat_eligible']} "
+            f"behavior_metrics={json.dumps(retrieval['behavior_metrics'], sort_keys=True)}"
         )
         return 0
 
@@ -410,7 +430,8 @@ def main() -> int:
             f"repeat_recent={retrieval['repeat_recent_recall']} "
             f"repeat_random={retrieval['repeat_random_expected_recall']} "
             f"repeat_lift={retrieval['repeat_lift_over_random']} "
-            f"repeat_eligible={retrieval['repeat_eligible']}"
+            f"repeat_eligible={retrieval['repeat_eligible']} "
+            f"behavior_metrics={json.dumps(retrieval['behavior_metrics'], sort_keys=True)}"
         )
         epoch_records.append({
             "variant": args.variant,
