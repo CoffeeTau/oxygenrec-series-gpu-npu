@@ -120,6 +120,25 @@ class OxygenRECModelTest(unittest.TestCase):
         for left, right in zip(first, third):
             torch.testing.assert_close(left[0], right[0])
 
+    def test_sample_weighted_ntp_matches_manual_weighting(self):
+        logits = (
+            torch.tensor([[3.0, 0.0], [0.0, 1.0]]),
+            torch.tensor([[2.0, 0.0], [0.0, 2.0]]),
+        )
+        targets = torch.tensor([[0, 0], [1, 1]])
+        weights = torch.tensor([1.0, 3.0])
+        loss, levels = self.model.weighted_ntp_loss(
+            logits, targets, sample_weights=weights
+        )
+        expected_levels = []
+        for level, level_logits in enumerate(logits):
+            per_sample = torch.nn.functional.cross_entropy(
+                level_logits, targets[:, level], reduction="none"
+            )
+            expected_levels.append((per_sample * weights).sum() / weights.sum())
+        torch.testing.assert_close(torch.stack(levels), torch.stack(expected_levels))
+        torch.testing.assert_close(loss, torch.stack(expected_levels).mean())
+
 
 if __name__ == "__main__":
     unittest.main()

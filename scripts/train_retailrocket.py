@@ -49,7 +49,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--long-history", type=int, default=100)
     parser.add_argument("--igr-top-k", type=int, default=10)
     parser.add_argument(
-        "--variant", choices=("base", "behavior", "instruction", "q2i", "igr", "igr_q2i"),
+        "--variant", choices=("base", "behavior", "behavior_strength_decay", "instruction", "q2i", "igr", "igr_q2i"),
         default="base",
     )
     parser.add_argument("--q2i-weight", type=float, default=0.2)
@@ -112,9 +112,15 @@ def tensor_batch(samples, registry, args, device):
         "history_padding_mask": torch.tensor(batch.history_padding_mask, dtype=torch.bool, device=device),
         "target_sids": torch.tensor(batch.target_sids, dtype=torch.long, device=device),
     }
-    if args.variant == "behavior":
+    if args.variant in {"behavior", "behavior_strength_decay"}:
         result["history_behavior_ids"] = torch.tensor(
             batch.history_behavior_ids, dtype=torch.long, device=device,
+        )
+    if args.variant == "behavior_strength_decay":
+        strength = {"view": 1.0, "addtocart": 2.0, "transaction": 3.0}
+        result["sample_weights"] = torch.tensor(
+            [strength[sample.target.behavior.value] for sample in samples],
+            dtype=torch.float32, device=device,
         )
     if args.variant in {"instruction", "q2i"}:
         scenario = {"view": 0, "addtocart": 1, "transaction": 2}
@@ -144,6 +150,7 @@ def validate(model, samples, registry, trie, args, device):
     for sample_batch in chunks(samples, args.batch_size):
         batch = tensor_batch(sample_batch, registry, args, device)
         target_sids = batch.pop("target_sids")
+        batch.pop("sample_weights", None)
         if args.variant in {"igr", "igr_q2i"}:
             diagnostic = model(target_sids=target_sids, **batch)
             long_sids = batch["long_history_sids"]
@@ -296,7 +303,8 @@ def main() -> int:
         feedforward_size=args.hidden_size * 4,
         max_history_items=args.max_history,
         scenario_vocab_size=3 if args.variant in {"instruction", "q2i", "igr", "igr_q2i"} else 1,
-        behavior_vocab_size=3 if args.variant == "behavior" else 0,
+        behavior_vocab_size=3 if args.variant in {"behavior", "behavior_strength_decay"} else 0,
+        behavior_time_decay=0.05 if args.variant == "behavior_strength_decay" else 0.0,
         igr_top_k=args.igr_top_k if uses_igr else 0,
         q2i_weight=args.q2i_weight if args.variant in {"q2i", "igr_q2i"} else 0.0,
         use_history_context_instruction=args.history_context_instruction,

@@ -27,6 +27,7 @@ class OxygenRECConfig:
     scenario_vocab_size: int = 1
     instruction_feature_size: int = 0
     behavior_vocab_size: int = 0
+    behavior_time_decay: float = 0.0
     use_history_context_instruction: bool = False
     history_context_pooling: str = "mean"
     q2i_dimension: int = 128
@@ -65,6 +66,8 @@ class OxygenRECConfig:
             raise ValueError("dropout must be in [0, 1)")
         if self.instruction_feature_size < 0 or self.behavior_vocab_size < 0 or self.igr_top_k < 0:
             raise ValueError("instruction_feature_size, behavior_vocab_size and igr_top_k cannot be negative")
+        if self.behavior_time_decay < 0:
+            raise ValueError("behavior_time_decay cannot be negative")
         for name in ("q2i_weight", "q2i_variance_weight", "q2i_decorrelation_weight"):
             if getattr(self, name) < 0:
                 raise ValueError(f"{name} cannot be negative")
@@ -179,6 +182,7 @@ class OxygenRECModel(nn.Module):
         *,
         target_sids: Tensor | None = None,
         history_behavior_ids: Tensor | None = None,
+        sample_weights: Tensor | None = None,
         instruction_ids: Tensor | None = None,
         scenario_ids: Tensor | None = None,
         instruction_features: Tensor | None = None,
@@ -224,7 +228,9 @@ class OxygenRECModel(nn.Module):
             head(hidden[:, level + 2, :])
             for level, head in enumerate(self.prediction_heads)
         )
-        ntp_loss, level_losses = self.weighted_ntp_loss(logits, target_sids, level_weights)
+        ntp_loss, level_losses = self.weighted_ntp_loss(
+            logits, target_sids, level_weights, sample_weights=sample_weights
+        )
         loss = ntp_loss
         q2i_loss = alignment_loss = None
         if self.config.q2i_weight > 0:
@@ -273,7 +279,16 @@ class OxygenRECModel(nn.Module):
                 raise ValueError("behavior_vocab_size must be configured")
             if behavior_ids.shape != history_sids.shape[:2] or behavior_ids.dtype != torch.long:
                 raise ValueError("history_behavior_ids must be torch.long [batch, history]")
-            hidden = hidden + self.behavior_embeddings(behavior_ids)
+            behavior_hidden = self.behavior_embeddings(behavior_ids)
+            if self.config.behavior_time_decay > 0:
+                valid = ~padding_mask
+                age = torch.flip(
+                    torch.cumsum(torch.flip(valid.to(hidden.dtype), dims=(1,)), dim=1),
+                    dims=(1,),
+                ) - 1.0
+                decay = torch.exp(-self.config.behavior_time_decay * age.clamp_min(0.0))
+                behavior_hidden = behavior_hidden * decay.unsqueeze(-1)
+            hidden = hidden + behavior_hidden
         return self.encoder(self.dropout(hidden), src_key_padding_mask=padding_mask)
 
     def _item_embedding(self, sids: Tensor) -> Tensor:
@@ -424,12 +439,24 @@ class OxygenRECModel(nn.Module):
         logits: Sequence[Tensor],
         target_sids: Tensor,
         level_weights: Sequence[float] | Tensor | None = None,
+        *,
+        sample_weights: Tensor | None = None,
     ) -> tuple[Tensor, tuple[Tensor, ...]]:
         """Return a weight-normalized cross-entropy over SID levels."""
 
-        level_losses = tuple(
-            F.cross_entropy(level_logits, target_sids[:, level])
+        if sample_weights is not None:
+            if sample_weights.shape != (target_sids.shape[0],):
+                raise ValueError("sample_weights must have shape [batch]")
+            if not torch.isfinite(sample_weights).all() or (sample_weights < 0).any() or sample_weights.sum() <= 0:
+                raise ValueError("sample_weights must be finite, non-negative, and sum positive")
+        per_level = tuple(
+            F.cross_entropy(level_logits, target_sids[:, level], reduction="none")
             for level, level_logits in enumerate(logits)
+        )
+        level_losses = tuple(
+            losses.mean() if sample_weights is None
+            else (losses * sample_weights).sum() / sample_weights.sum()
+            for losses in per_level
         )
         if level_weights is None:
             weights = target_sids.new_ones(len(level_losses), dtype=torch.float32)
