@@ -37,6 +37,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--beam-width", type=int, default=5)
     parser.add_argument("--updates", type=int, default=20)
     parser.add_argument("--learning-rate", type=float, default=1e-5)
+    parser.add_argument(
+        "--target-injection", choices=("none", "always"), default="none",
+        help="Teacher-augment missing targets or keep strictly old-policy beams.",
+    )
     parser.add_argument("--output", type=Path)
     return parser.parse_args()
 
@@ -191,6 +195,7 @@ def main() -> int:
     optimizer = torch.optim.AdamW(policy.parameters(), lr=args.learning_rate)
     first_objective = last_objective = 0.0
     injected = 0
+    covered = 0
     rollouts = []
     for _, batch in batches:
         with torch.no_grad():
@@ -200,7 +205,8 @@ def main() -> int:
             ).semantic_ids
             target = batch["target_sids"]
             present = (candidates == target[:, None]).all(dim=-1).any(dim=1)
-            if (~present).any():
+            covered += int(present.sum())
+            if args.target_injection == "always" and (~present).any():
                 candidates = candidates.clone()
                 candidates[~present, -1] = target[~present]
                 injected += int((~present).sum())
@@ -238,7 +244,9 @@ def main() -> int:
             first_objective = epoch_objective
         last_objective = epoch_objective
     after = evaluate(policy, batches, registry, trie, args.beam_width)
-    output_path = args.output or checkpoint_path.parent / "sa_gcpo-retailrocket.pt"
+    output_path = args.output or checkpoint_path.parent / (
+        f"sa_gcpo-retailrocket-{args.target_injection}.pt"
+    )
     torch.save({
         "model_state": policy.state_dict(),
         "source_checkpoint": str(checkpoint_path),
@@ -246,12 +254,14 @@ def main() -> int:
         "validation_samples": len(validation),
         "updates": args.updates,
         "learning_rate": args.learning_rate,
+        "target_injection": args.target_injection,
         "objective_before": first_objective,
         "objective_after": last_objective,
     }, output_path)
     print(
         f"OK device={device} checkpoint={checkpoint_path} variant={variant} "
-        f"validation={len(validation)} injected_targets={injected} "
+        f"validation={len(validation)} target_coverage={covered} "
+        f"target_injection={args.target_injection} injected_targets={injected} "
         f"objective={first_objective:.6f}->{last_objective:.6f} output={output_path}"
     )
     print(format_metrics("before", before))

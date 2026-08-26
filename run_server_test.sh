@@ -11,4 +11,5 @@ python scripts/train_sa_gcpo_retailrocket.py \
     --validation-samples 200 \
     --batch-size 16 \
     --beam-width 5 \
-    --updates 20
+    --updates 20 \
+    --target-injection none
