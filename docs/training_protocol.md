@@ -85,10 +85,11 @@ view/cart/transaction target type is therefore an explicit public-data scenario
 proxy, not a reproduction of the paper's private scenario instructions. Report
 the four variants as within-project ablations only.
 
-The optional `--history-context-instruction` is a stronger public-data proxy:
-it masked-mean-pools only the strictly-prior short-history SID embeddings and
-projects them into the reasoning prompt. It is auditable and leakage-safe, but
-it is not the paper's Slow-LLM-generated textual reasoning instruction.
+The optional `--history-context-instruction` is a stronger public-data proxy.
+`--history-context-pooling mean` masked-mean-pools the strictly-prior short
+history; `attention` uses the scenario embedding as a query to weight those
+items before projection into the reasoning prompt. Both are auditable and
+leakage-safe, but neither is the paper's Slow-LLM-generated textual instruction.
 
 Every output directory contains `metrics.jsonl`, rewritten atomically at each
 completed epoch from the current run. Multi-seed experiments are summarized by

@@ -23,6 +23,7 @@ class InstructionQ2IIGRTest(unittest.TestCase):
             instruction_feature_size=6, q2i_dimension=8,
             q2i_weight=0.2, igr_top_k=2,
             use_history_context_instruction=True,
+            history_context_pooling="attention",
         ))
         self.short = torch.tensor([[[1, 2, 3], [4, 5, 6]], [[2, 3, 4], [5, 6, 7]]])
         self.short_mask = torch.zeros(2, 2, dtype=torch.bool)

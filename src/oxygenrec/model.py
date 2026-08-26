@@ -27,6 +27,7 @@ class OxygenRECConfig:
     scenario_vocab_size: int = 1
     instruction_feature_size: int = 0
     use_history_context_instruction: bool = False
+    history_context_pooling: str = "mean"
     q2i_dimension: int = 128
     q2i_weight: float = 0.0
     q2i_variance_weight: float = 0.01
@@ -66,6 +67,8 @@ class OxygenRECConfig:
         for name in ("q2i_weight", "q2i_variance_weight", "q2i_decorrelation_weight"):
             if getattr(self, name) < 0:
                 raise ValueError(f"{name} cannot be negative")
+        if self.history_context_pooling not in {"mean", "attention"}:
+            raise ValueError("history_context_pooling must be mean or attention")
 
 
 @dataclass(frozen=True)
@@ -114,6 +117,9 @@ class OxygenRECModel(nn.Module):
         self.history_context_adapter = nn.Sequential(
             nn.Linear(config.hidden_size, config.hidden_size), nn.GELU()
         )
+        self.history_context_query = nn.Linear(config.hidden_size, config.hidden_size)
+        self.history_context_key = nn.Linear(config.hidden_size, config.hidden_size)
+        self.history_context_value = nn.Linear(config.hidden_size, config.hidden_size)
         self.query_adapter = nn.Sequential(
             nn.Linear(config.hidden_size * 2, config.hidden_size), nn.GELU(),
             nn.Linear(config.hidden_size, config.q2i_dimension),
@@ -187,7 +193,9 @@ class OxygenRECModel(nn.Module):
         batch_size = history_sids.shape[0]
         instruction_ids = self._default_ids(instruction_ids, batch_size, history_sids.device)
         scenario_ids = self._default_ids(scenario_ids, batch_size, history_sids.device)
-        history_context = self._history_context(history_sids, history_padding_mask)
+        history_context = self._history_context(
+            history_sids, history_padding_mask, scenario_ids
+        )
         scenario_prompt, reasoning_prompt, query = self._instruction_prompt(
             scenario_ids, instruction_ids, instruction_features, trigger_sids,
             history_context,
@@ -289,12 +297,26 @@ class OxygenRECModel(nn.Module):
         query = F.normalize(self.query_adapter(torch.cat((scenario, reasoning), dim=-1)), dim=-1)
         return scenario, reasoning, query
 
-    def _history_context(self, history_sids: Tensor, padding_mask: Tensor) -> Tensor | None:
+    def _history_context(
+        self, history_sids: Tensor, padding_mask: Tensor, scenario_ids: Tensor
+    ) -> Tensor | None:
         if not self.config.use_history_context_instruction:
             return None
         items = self._item_embedding(history_sids)
         valid = (~padding_mask).unsqueeze(-1).to(items.dtype)
-        pooled = (items * valid).sum(dim=1) / valid.sum(dim=1).clamp_min(1.0)
+        if self.config.history_context_pooling == "mean":
+            pooled = (items * valid).sum(dim=1) / valid.sum(dim=1).clamp_min(1.0)
+        else:
+            scenario = self.scenario_embeddings(scenario_ids)
+            query = self.history_context_query(scenario)
+            keys = self.history_context_key(items)
+            scores = torch.einsum("bd,bhd->bh", query, keys)
+            scores = scores / self.config.hidden_size**0.5
+            scores = scores.masked_fill(padding_mask, float("-inf"))
+            weights = scores.softmax(dim=1)
+            pooled = torch.einsum(
+                "bh,bhd->bd", weights, self.history_context_value(items)
+            )
         return self.history_context_adapter(pooled)
 
     def _augment_history(
@@ -425,7 +447,9 @@ class OxygenRECModel(nn.Module):
         batch_size = history_sids.shape[0]
         instruction_ids = self._default_ids(instruction_ids, batch_size, history_sids.device)
         scenario_ids = self._default_ids(scenario_ids, batch_size, history_sids.device)
-        history_context = self._history_context(history_sids, history_padding_mask)
+        history_context = self._history_context(
+            history_sids, history_padding_mask, scenario_ids
+        )
         scenario_prompt, reasoning_prompt, query = self._instruction_prompt(
             scenario_ids, instruction_ids, instruction_features, trigger_sids,
             history_context,
@@ -480,7 +504,9 @@ class OxygenRECModel(nn.Module):
         batch_size = history_sids.shape[0]
         instruction_ids = self._default_ids(instruction_ids, batch_size, history_sids.device)
         scenario_ids = self._default_ids(scenario_ids, batch_size, history_sids.device)
-        history_context = self._history_context(history_sids, history_padding_mask)
+        history_context = self._history_context(
+            history_sids, history_padding_mask, scenario_ids
+        )
         scenario_prompt, reasoning_prompt, query = self._instruction_prompt(
             scenario_ids, instruction_ids, instruction_features, trigger_sids,
             history_context,
