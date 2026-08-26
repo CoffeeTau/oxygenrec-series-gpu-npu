@@ -20,7 +20,10 @@ def main() -> int:
     current = torch.nn.Parameter(torch.zeros(2, 4, 3, device=device))
     old = torch.zeros_like(current.detach())
     rewards = torch.tensor([[0.2, 0.6, 0.9, 1.2], [0.1, 0.4, 0.8, 1.1]], device=device)
-    targets = torch.tensor([0.8, 0.7], device=device)
+    # In each group, the second-highest reward has positive normalized
+    # advantage but remains below the real target-item reward. Equation 8 must
+    # suppress exactly those two candidates.
+    targets = torch.tensor([1.0, 0.9], device=device)
     mask = torch.tensor([[[1,1,1],[1,1,1],[1,1,0],[1,1,1]]] * 2, dtype=torch.bool, device=device)
     optimizer = torch.optim.Adam([current], lr=0.05)
     objectives = []
@@ -36,6 +39,8 @@ def main() -> int:
     if not objectives[-1] > objectives[0]:
         raise RuntimeError("SA-GCPO objective did not improve")
     suppressed = int((output.thresholded_advantage == 0).sum())
+    if suppressed != 2:
+        raise RuntimeError(f"expected two reward-threshold suppressions, got {suppressed}")
     print(
         f"OK device={device} objective={objectives[0]:.6f}->{objectives[-1]:.6f} "
         f"suppressed={suppressed} ratio_min={float(output.importance_ratio.min()):.6f} "
