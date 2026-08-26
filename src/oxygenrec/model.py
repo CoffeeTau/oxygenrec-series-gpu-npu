@@ -26,6 +26,7 @@ class OxygenRECConfig:
     instruction_vocab_size: int = 1
     scenario_vocab_size: int = 1
     instruction_feature_size: int = 0
+    behavior_vocab_size: int = 0
     use_history_context_instruction: bool = False
     history_context_pooling: str = "mean"
     q2i_dimension: int = 128
@@ -62,8 +63,8 @@ class OxygenRECConfig:
             raise ValueError("hidden_size must be divisible by attention_heads")
         if not 0.0 <= self.dropout < 1.0:
             raise ValueError("dropout must be in [0, 1)")
-        if self.instruction_feature_size < 0 or self.igr_top_k < 0:
-            raise ValueError("instruction_feature_size and igr_top_k cannot be negative")
+        if self.instruction_feature_size < 0 or self.behavior_vocab_size < 0 or self.igr_top_k < 0:
+            raise ValueError("instruction_feature_size, behavior_vocab_size and igr_top_k cannot be negative")
         for name in ("q2i_weight", "q2i_variance_weight", "q2i_decorrelation_weight"):
             if getattr(self, name) < 0:
                 raise ValueError(f"{name} cannot be negative")
@@ -110,6 +111,10 @@ class OxygenRECModel(nn.Module):
             config.instruction_vocab_size, config.hidden_size
         )
         self.scenario_embeddings = nn.Embedding(config.scenario_vocab_size, config.hidden_size)
+        self.behavior_embeddings = (
+            nn.Embedding(config.behavior_vocab_size, config.hidden_size)
+            if config.behavior_vocab_size else None
+        )
         self.instruction_feature_adapter = (
             nn.Linear(config.instruction_feature_size, config.hidden_size)
             if config.instruction_feature_size else None
@@ -173,6 +178,7 @@ class OxygenRECModel(nn.Module):
         history_padding_mask: Tensor,
         *,
         target_sids: Tensor | None = None,
+        history_behavior_ids: Tensor | None = None,
         instruction_ids: Tensor | None = None,
         scenario_ids: Tensor | None = None,
         instruction_features: Tensor | None = None,
@@ -204,7 +210,9 @@ class OxygenRECModel(nn.Module):
             history_sids, history_padding_mask, long_history_sids,
             long_history_padding_mask, query
         )
-        memory = self._encode(encoder_sids, encoder_mask)
+        if long_history_sids is not None and history_behavior_ids is not None:
+            raise ValueError("behavior-conditioned IGR requires long-history behavior IDs")
+        memory = self._encode(encoder_sids, encoder_mask, history_behavior_ids)
         if target_sids is None:
             logits = self._autoregressive_logits(
                 memory, encoder_mask, scenario_prompt, reasoning_prompt
@@ -249,7 +257,10 @@ class OxygenRECModel(nn.Module):
             prefix = torch.cat((prefix, logits.argmax(dim=-1, keepdim=True)), dim=1)
         return tuple(outputs)
 
-    def _encode(self, history_sids: Tensor, padding_mask: Tensor) -> Tensor:
+    def _encode(
+        self, history_sids: Tensor, padding_mask: Tensor,
+        behavior_ids: Tensor | None = None,
+    ) -> Tensor:
         _, history_length, _ = history_sids.shape
         positions = torch.arange(history_length, device=history_sids.device)
         hidden = self.history_positions(positions).unsqueeze(0)
@@ -257,6 +268,12 @@ class OxygenRECModel(nn.Module):
             embedding(history_sids[:, :, level])
             for level, embedding in enumerate(self.sid_embeddings)
         )
+        if behavior_ids is not None:
+            if self.behavior_embeddings is None:
+                raise ValueError("behavior_vocab_size must be configured")
+            if behavior_ids.shape != history_sids.shape[:2] or behavior_ids.dtype != torch.long:
+                raise ValueError("history_behavior_ids must be torch.long [batch, history]")
+            hidden = hidden + self.behavior_embeddings(behavior_ids)
         return self.encoder(self.dropout(hidden), src_key_padding_mask=padding_mask)
 
     def _item_embedding(self, sids: Tensor) -> Tensor:
@@ -433,6 +450,7 @@ class OxygenRECModel(nn.Module):
         history_padding_mask: Tensor,
         candidate_sids: Tensor,
         *,
+        history_behavior_ids: Tensor | None = None,
         instruction_ids: Tensor | None = None,
         scenario_ids: Tensor | None = None,
         instruction_features: Tensor | None = None,
@@ -467,6 +485,7 @@ class OxygenRECModel(nn.Module):
 
         output = self(
             expanded_history, expanded_mask, target_sids=targets,
+            history_behavior_ids=expand_features(history_behavior_ids),
             instruction_ids=expand_vector(instruction_ids),
             scenario_ids=expand_vector(scenario_ids),
             instruction_features=expand_features(instruction_features),
@@ -490,6 +509,7 @@ class OxygenRECModel(nn.Module):
         history_padding_mask: Tensor,
         trie: PrefixTrie,
         *,
+        history_behavior_ids: Tensor | None = None,
         instruction_ids: Tensor | None = None,
         scenario_ids: Tensor | None = None,
         instruction_features: Tensor | None = None,
@@ -514,7 +534,9 @@ class OxygenRECModel(nn.Module):
             history_sids, history_padding_mask, long_history_sids,
             long_history_padding_mask, query
         )
-        memory = self._encode(encoder_sids, encoder_mask)
+        if long_history_sids is not None and history_behavior_ids is not None:
+            raise ValueError("behavior-conditioned IGR requires long-history behavior IDs")
+        memory = self._encode(encoder_sids, encoder_mask, history_behavior_ids)
         generated = torch.empty(
             (batch_size, 0), dtype=torch.long, device=history_sids.device
         )
@@ -545,6 +567,7 @@ class OxygenRECModel(nn.Module):
         trie: PrefixTrie,
         *,
         beam_width: int,
+        history_behavior_ids: Tensor | None = None,
         instruction_ids: Tensor | None = None,
         scenario_ids: Tensor | None = None,
         instruction_features: Tensor | None = None,
@@ -571,7 +594,9 @@ class OxygenRECModel(nn.Module):
             history_sids, history_padding_mask, long_history_sids,
             long_history_padding_mask, query
         )
-        memory = self._encode(encoder_sids, encoder_mask)
+        if long_history_sids is not None and history_behavior_ids is not None:
+            raise ValueError("behavior-conditioned IGR requires long-history behavior IDs")
+        memory = self._encode(encoder_sids, encoder_mask, history_behavior_ids)
         all_paths: list[list[tuple[int, ...]]] = []
         all_scores: list[list[float]] = []
         for row in range(batch_size):

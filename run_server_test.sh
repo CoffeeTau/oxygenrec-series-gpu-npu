@@ -5,15 +5,18 @@ set -euo pipefail
 project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$project_dir"
 
-for sample_seed in 17 23 41; do
-    python scripts/train_sa_gcpo_retailrocket.py \
+for variant in base behavior; do
+    python scripts/train_retailrocket.py \
         --events data/raw/retailrocket/events.csv \
+        --sid-registry checkpoints/retailrocket_attention_context_instruction/igr_q2i/sid_registry.json \
+        --output-dir "checkpoints/retailrocket_behavior/${variant}" \
         --device cuda \
-        --sample-seed "$sample_seed" \
-        --alignment-samples 200 \
-        --validation-samples 1000 \
-        --batch-size 16 \
-        --beam-width 5 \
-        --updates 20 \
-        --target-injection none
+        --variant "$variant" \
+        --seed 17 \
+        --max-history 20 \
+        --max-train-samples 20000 \
+        --max-validation-samples 1000 \
+        --batch-size 128 \
+        --epochs 2 \
+        --beam-width 5
 done

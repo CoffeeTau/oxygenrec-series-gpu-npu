@@ -49,7 +49,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--long-history", type=int, default=100)
     parser.add_argument("--igr-top-k", type=int, default=10)
     parser.add_argument(
-        "--variant", choices=("base", "instruction", "q2i", "igr", "igr_q2i"),
+        "--variant", choices=("base", "behavior", "instruction", "q2i", "igr", "igr_q2i"),
         default="base",
     )
     parser.add_argument("--q2i-weight", type=float, default=0.2)
@@ -112,6 +112,10 @@ def tensor_batch(samples, registry, args, device):
         "history_padding_mask": torch.tensor(batch.history_padding_mask, dtype=torch.bool, device=device),
         "target_sids": torch.tensor(batch.target_sids, dtype=torch.long, device=device),
     }
+    if args.variant == "behavior":
+        result["history_behavior_ids"] = torch.tensor(
+            batch.history_behavior_ids, dtype=torch.long, device=device,
+        )
     if args.variant in {"instruction", "q2i"}:
         scenario = {"view": 0, "addtocart": 1, "transaction": 2}
         result["scenario_ids"] = torch.tensor(
@@ -272,7 +276,8 @@ def main() -> int:
         decoder_layers=args.decoder_layers,
         feedforward_size=args.hidden_size * 4,
         max_history_items=args.max_history,
-        scenario_vocab_size=3 if args.variant != "base" else 1,
+        scenario_vocab_size=3 if args.variant in {"instruction", "q2i", "igr", "igr_q2i"} else 1,
+        behavior_vocab_size=3 if args.variant == "behavior" else 0,
         igr_top_k=args.igr_top_k if uses_igr else 0,
         q2i_weight=args.q2i_weight if args.variant in {"q2i", "igr_q2i"} else 0.0,
         use_history_context_instruction=args.history_context_instruction,

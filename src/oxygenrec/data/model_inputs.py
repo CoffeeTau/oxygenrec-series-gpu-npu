@@ -13,6 +13,7 @@ from .temporal import NextItemSample
 class SIDModelBatch:
     history_sids: tuple[tuple[tuple[int, ...], ...], ...]
     history_padding_mask: tuple[tuple[bool, ...], ...]
+    history_behavior_ids: tuple[tuple[int, ...], ...]
     target_sids: tuple[tuple[int, ...], ...]
 
 
@@ -22,8 +23,10 @@ class LongShortSIDModelBatch:
 
     short_history_sids: tuple[tuple[tuple[int, ...], ...], ...]
     short_history_padding_mask: tuple[tuple[bool, ...], ...]
+    short_history_behavior_ids: tuple[tuple[int, ...], ...]
     long_history_sids: tuple[tuple[tuple[int, ...], ...], ...]
     long_history_padding_mask: tuple[tuple[bool, ...], ...]
+    long_history_behavior_ids: tuple[tuple[int, ...], ...]
     target_sids: tuple[tuple[int, ...], ...]
     scenario_ids: tuple[int, ...]
 
@@ -46,34 +49,41 @@ def build_sid_model_batch(
         raise ValueError("max_history_items must be positive")
 
     histories: list[tuple[tuple[int, ...], ...]] = []
+    history_behaviors: list[tuple[int, ...]] = []
     targets: list[tuple[int, ...]] = []
+    behavior_id = {"view": 0, "addtocart": 1, "transaction": 2}
     for sample in samples:
         if sample.target.item_id not in registry.item_to_sid:
             raise ValueError(
                 f"target item {sample.target.item_id!r} is absent from SID registry"
             )
-        known_history = [
-            registry.sid_for(event.item_id).codes
+        known_events = [
+            event
             for event in sample.history
             if event.item_id in registry.item_to_sid
         ][-max_history_items:]
+        known_history = [registry.sid_for(event.item_id).codes for event in known_events]
         if not known_history:
             raise ValueError(
                 f"sample for user {sample.user_id!r} has no known history items"
             )
         histories.append(tuple(known_history))
+        history_behaviors.append(tuple(behavior_id[event.behavior.value] for event in known_events))
         targets.append(registry.sid_for(sample.target.item_id).codes)
 
     padded_history: list[tuple[tuple[int, ...], ...]] = []
     padding_masks: list[tuple[bool, ...]] = []
+    padded_behaviors: list[tuple[int, ...]] = []
     pad_sid = (0,) * registry.levels
-    for history in histories:
+    for history, behaviors in zip(histories, history_behaviors, strict=True):
         padding = max_history_items - len(history)
         padded_history.append((pad_sid,) * padding + history)
         padding_masks.append((True,) * padding + (False,) * len(history))
+        padded_behaviors.append((0,) * padding + behaviors)
     return SIDModelBatch(
         history_sids=tuple(padded_history),
         history_padding_mask=tuple(padding_masks),
+        history_behavior_ids=tuple(padded_behaviors),
         target_sids=tuple(targets),
     )
 
@@ -104,8 +114,10 @@ def build_long_short_sid_model_batch(
     pad_sid = (0,) * registry.levels
     short_rows = []
     short_masks = []
+    short_behaviors = []
     long_rows = []
     long_masks = []
+    long_behaviors = []
     targets = []
     scenarios = []
     scenario_by_behavior = {"view": 0, "addtocart": 1, "transaction": 2}
@@ -114,13 +126,17 @@ def build_long_short_sid_model_batch(
             raise ValueError(
                 f"target item {sample.target.item_id!r} is absent from SID registry"
             )
-        known = [
-            registry.sid_for(event.item_id).codes
+        known_events = [
+            event
             for event in sample.history
             if event.item_id in registry.item_to_sid
         ]
+        known = [registry.sid_for(event.item_id).codes for event in known_events]
+        known_behavior = [scenario_by_behavior[event.behavior.value] for event in known_events]
         short = known[-short_history_items:]
         long = known[: -len(short)][-long_history_items:] if short else []
+        short_behavior = known_behavior[-short_history_items:]
+        long_behavior = known_behavior[: -len(short_behavior)][-long_history_items:] if short_behavior else []
         if not short:
             raise ValueError(f"sample for user {sample.user_id!r} has no known short history")
         if len(long) < minimum_long_history_items:
@@ -131,15 +147,19 @@ def build_long_short_sid_model_batch(
         long_pad = long_history_items - len(long)
         short_rows.append((pad_sid,) * short_pad + tuple(short))
         short_masks.append((True,) * short_pad + (False,) * len(short))
+        short_behaviors.append((0,) * short_pad + tuple(short_behavior))
         long_rows.append((pad_sid,) * long_pad + tuple(long))
         long_masks.append((True,) * long_pad + (False,) * len(long))
+        long_behaviors.append((0,) * long_pad + tuple(long_behavior))
         targets.append(registry.sid_for(sample.target.item_id).codes)
         scenarios.append(scenario_by_behavior[sample.target.behavior.value])
     return LongShortSIDModelBatch(
         short_history_sids=tuple(short_rows),
         short_history_padding_mask=tuple(short_masks),
+        short_history_behavior_ids=tuple(short_behaviors),
         long_history_sids=tuple(long_rows),
         long_history_padding_mask=tuple(long_masks),
+        long_history_behavior_ids=tuple(long_behaviors),
         target_sids=tuple(targets),
         scenario_ids=tuple(scenarios),
     )

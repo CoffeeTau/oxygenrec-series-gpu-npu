@@ -89,6 +89,37 @@ class OxygenRECModelTest(unittest.TestCase):
             self.assertTrue(all(trie.contains(row) for row in ranking))
             self.assertGreaterEqual(scores[0], scores[1])
 
+    def test_history_behavior_conditioning_changes_logits(self):
+        from oxygenrec.model import OxygenRECConfig, OxygenRECModel
+
+        torch.manual_seed(11)
+        model = OxygenRECModel(OxygenRECConfig(
+            sid_width=11, behavior_vocab_size=3, hidden_size=16,
+            attention_heads=4, encoder_layers=1, decoder_layers=1,
+            feedforward_size=32, dropout=0.0, max_history_items=4,
+        )).eval()
+        views = torch.zeros(2, 3, dtype=torch.long)
+        purchases = views.clone()
+        purchases[:, 1] = 2
+        first = model(
+            self.history, self.padding, target_sids=self.targets,
+            history_behavior_ids=views,
+        ).logits
+        second = model(
+            self.history, self.padding, target_sids=self.targets,
+            history_behavior_ids=purchases,
+        ).logits
+        self.assertTrue(any(not torch.equal(left, right) for left, right in zip(first, second)))
+
+        padded_change = views.clone()
+        padded_change[0, 2] = 2
+        third = model(
+            self.history, self.padding, target_sids=self.targets,
+            history_behavior_ids=padded_change,
+        ).logits
+        for left, right in zip(first, third):
+            torch.testing.assert_close(left[0], right[0])
+
 
 if __name__ == "__main__":
     unittest.main()
