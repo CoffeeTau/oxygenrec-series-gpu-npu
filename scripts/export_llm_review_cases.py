@@ -80,17 +80,26 @@ def render_markdown(records: list[dict]) -> str:
             f"- 最近高意图事件：{proxy['observations']['recent_high_intent_events']}",
             f"- 重复商品种类：{proxy['observations']['repeated_item_kinds']}",
             "", "### IGR Top-K", "",
-            "| rank | long index | score | selected SID |", "|---:|---:|---:|---|",
+            "| rank | long index | score | selected SID | target levels | behavior | hours ago | high intent |",
+            "|---:|---:|---:|---|---:|---|---:|---|",
         ])
-        for rank, (index, score, sid) in enumerate(zip(
-            igr["selected_long_history_indices"], igr["scores"],
-            igr["selected_sids"], strict=True,
-        ), start=1):
-            lines.append(f"| {rank} | {index} | {score:.6f} | `{sid}` |")
+        for rank, evidence in enumerate(igr["selected_evidence"], start=1):
+            event = evidence["event"] or {}
+            hours = event.get("hours_before_target")
+            lines.append(
+                f"| {rank} | {evidence['long_history_index']} | {evidence['score']:.6f} | "
+                f"`{evidence['sid']}` | {evidence['sid_level_matches_target']}/3 | "
+                f"{event.get('behavior', 'padding')} | "
+                f"{hours:.2f} | {event.get('high_intent', False)} |"
+                if hours is not None else
+                f"| {rank} | {evidence['long_history_index']} | {evidence['score']:.6f} | "
+                f"`{evidence['sid']}` | {evidence['sid_level_matches_target']}/3 | padding | - | False |"
+            )
         lines.extend([
             "",
             f"- IGR 是否取回目标 SID：`{igr['retrieved_target_sid']}`",
             f"- Q2I alignment loss：`{record['q2i']['batch_alignment_loss']}`",
+            f"- Q2I cosine alignment proxy：`{record['q2i']['cosine_alignment_proxy']}`",
             "", "### Constrained Beam", "",
             "| rank | SID | score | legal | collision | target hit |",
             "|---:|---|---:|---|---:|---|",
@@ -178,6 +187,33 @@ def main() -> int:
         selected_scores = diagnostic.igr_scores[0].cpu().tolist()
         selected_sids = [raw.long_history_sids[0][index] for index in selected_indices]
         target_codes = tuple(raw.target_sids[0])
+        known_events = [
+            event for event in sample.history if event.item_id in registry.item_to_sid
+        ]
+        short_events = known_events[-config.max_history_items:]
+        long_events = known_events[:-len(short_events)][-long_history:]
+        long_padding = long_history - len(long_events)
+        selected_evidence = []
+        for index, score, sid in zip(
+            selected_indices, selected_scores, selected_sids, strict=True
+        ):
+            event = long_events[index - long_padding] if index >= long_padding else None
+            selected_evidence.append({
+                "long_history_index": index,
+                "score": score,
+                "sid": list(sid),
+                "sid_level_matches_target": sum(
+                    left == right for left, right in zip(sid, target_codes, strict=True)
+                ),
+                "event": None if event is None else {
+                    "anonymized_item": anonymize(event.item_id),
+                    "behavior": event.behavior.value,
+                    "hours_before_target": (
+                        sample.target.timestamp_ms - event.timestamp_ms
+                    ) / 3_600_000.0,
+                    "high_intent": event.behavior.value in {"addtocart", "transaction"},
+                },
+            })
         repeat_hit = target_codes in selected_sids
         beam_rows = []
         for rank, (sid, score) in enumerate(
@@ -213,11 +249,16 @@ def main() -> int:
                 "selected_long_history_indices": selected_indices,
                 "scores": selected_scores,
                 "selected_sids": [list(sid) for sid in selected_sids],
+                "selected_evidence": selected_evidence,
                 "retrieved_target_sid": repeat_hit,
             },
             "q2i": {
                 "batch_alignment_loss": (
                     float(diagnostic.q2i_alignment_loss)
+                    if diagnostic.q2i_alignment_loss is not None else None
+                ),
+                "cosine_alignment_proxy": (
+                    -float(diagnostic.q2i_alignment_loss)
                     if diagnostic.q2i_alignment_loss is not None else None
                 ),
                 "note": "single-case cosine alignment proxy; not a search-query label",
