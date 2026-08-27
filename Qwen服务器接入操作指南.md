@@ -177,6 +177,22 @@ python scripts/download_qwen_model.py --provider modelscope
 3. 让运维修复容器/系统CA证书；
 4. 在可验证的机器下载官方snapshot，再连同`MODEL_SOURCE.json`传到服务器。
 
+如果因当前实验必须先下载，项目提供显式的临时关闭选项：
+
+```bash
+python scripts/download_qwen_model.py \
+    --provider modelscope \
+    --insecure-skip-tls-verify
+```
+
+该选项只在当前Python下载进程中令Requests使用`verify=False`，不会修改系统CA或其他shell命令。脚本会打印醒目warning，并在`MODEL_SOURCE.json`记录：
+
+```json
+"tls_verification": false
+```
+
+风险边界：代理可以查看或替换传输内容，下载来源真实性不能由TLS保证。只将它用于当前受控网络中的临时实验；取得公司CA后应恢复验证。
+
 ### 7.3 找不到模型目录
 
 错误通常类似：

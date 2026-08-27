@@ -23,11 +23,37 @@ def parse_args() -> argparse.Namespace:
         help="Defaults to master for ModelScope and main for Hugging Face.",
     )
     parser.add_argument("--max-workers", type=int, default=4)
+    parser.add_argument(
+        "--insecure-skip-tls-verify", action="store_true",
+        help="Disable TLS certificate verification only inside this process.",
+    )
     return parser.parse_args()
+
+
+def disable_tls_verification_for_process() -> None:
+    """Force Requests sessions to skip verification in this process only."""
+
+    import requests
+    import urllib3
+
+    original = requests.sessions.Session.request
+
+    def insecure_request(session, method, url, **kwargs):
+        kwargs["verify"] = False
+        return original(session, method, url, **kwargs)
+
+    requests.sessions.Session.request = insecure_request
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 
 def main() -> None:
     args = parse_args()
+    if args.insecure_skip_tls_verify:
+        print(
+            "WARNING tls_verification=false scope=current_process "
+            "download_source_authenticity_not_guaranteed"
+        )
+        disable_tls_verification_for_process()
     args.local_dir.mkdir(parents=True, exist_ok=True)
     revision = args.revision or ("master" if args.provider == "modelscope" else "main")
     resolved_commit = None
@@ -70,6 +96,7 @@ def main() -> None:
         )
     provenance = {
         "provider": args.provider,
+        "tls_verification": not args.insecure_skip_tls_verify,
         "repo_id": args.repo_id,
         "requested_revision": revision,
         "resolved_commit": resolved_commit,
