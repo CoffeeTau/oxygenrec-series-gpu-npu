@@ -6,6 +6,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from oxygenrec.llm_features import build_behavior_prompt
 
+try:
+    import torch
+except ImportError:
+    torch = None
+
 
 class LLMFeaturePromptTest(unittest.TestCase):
     def test_prompt_contains_only_supplied_prior_evidence(self):
@@ -26,6 +31,17 @@ class LLMFeaturePromptTest(unittest.TestCase):
                 history_length=0, behavior_counts={}, recent_behaviors=(),
                 repeated_item_kinds=0,
             )
+
+
+@unittest.skipIf(torch is None, "PyTorch is not installed in this environment")
+class FrozenFeatureTensorBoundaryTest(unittest.TestCase):
+    def test_clone_outside_inference_mode_can_feed_trainable_adapter(self):
+        with torch.inference_mode():
+            inference_feature = torch.ones(2, 4)
+        ordinary_feature = inference_feature.clone()
+        adapter = torch.nn.Linear(4, 3)
+        adapter(ordinary_feature).sum().backward()
+        self.assertIsNotNone(adapter.weight.grad)
 
 
 if __name__ == "__main__":

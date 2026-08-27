@@ -99,5 +99,9 @@ class FrozenLLMInstructionEncoder:
             mask = tokens["attention_mask"].unsqueeze(-1).to(hidden.dtype)
             pooled = (hidden * mask).sum(dim=1) / mask.sum(dim=1).clamp_min(1.0)
             features = F.normalize(pooled.float(), dim=-1)
+        # Tensors created in inference_mode cannot be saved for backward by
+        # the trainable OxygenREC adapter.  Clone after leaving the context to
+        # produce an ordinary detached tensor while keeping Qwen frozen.
+        features = features.clone()
         counts = tuple(int(value) for value in tokens["attention_mask"].sum(dim=1).tolist())
         return LLMFeatureBatch(features=features, token_counts=counts)

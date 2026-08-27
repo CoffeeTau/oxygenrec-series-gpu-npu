@@ -228,6 +228,14 @@ nvidia-smi
 
 本轮不强制使用FlashAttention 2，也不依赖bitsandbytes、DeepSpeed或FAISS。不要通过升级整个CUDA/PyTorch环境解决单个扩展错误；先保留完整错误信息，再决定是否显式切回PyTorch SDPA/eager attention。
 
+### 7.6 `Inference tensors cannot be saved for backward`
+
+这是早期版本冻结Qwen特征直接进入可训练adapter时的tensor类型问题，不是模型、显存或CUDA故障。更新项目代码后，encoder会在离开`torch.inference_mode()`后复制为普通detached tensor。无需重新下载模型，直接重新运行：
+
+```bash
+CUDA_VISIBLE_DEVICES=0 bash run_server_test.sh
+```
+
 ## 8. 需要返回的最小信息
 
 因公司信息安全限制，只需要提供最终`OK`行，或失败时提供：
