@@ -59,7 +59,7 @@ def main() -> None:
     generator = FrozenLLMReasoningGenerator(
         args.model_path, device=args.device, dtype=args.dtype,
     )
-    outputs = generator.generate(prompts, max_new_tokens=256)
+    outputs = generator.generate(prompts, max_new_tokens=384)
     records = []
     for case, prompt, output in zip(cases, prompts, outputs, strict=True):
         records.append({

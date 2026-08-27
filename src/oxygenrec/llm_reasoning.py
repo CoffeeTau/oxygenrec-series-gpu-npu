@@ -36,10 +36,17 @@ def parse_reasoning_json(text: str) -> dict[str, object]:
     """Extract one JSON object while tolerating accidental surrounding text."""
 
     start = text.find("{")
-    end = text.rfind("}")
-    if start < 0 or end <= start:
+    if start < 0:
         raise ValueError("generated text does not contain a JSON object")
-    parsed = json.loads(text[start:end + 1])
+    try:
+        parsed, _ = json.JSONDecoder().raw_decode(text, idx=start)
+    except json.JSONDecodeError as error:
+        raise ValueError(
+            "generated JSON is incomplete or invalid: "
+            f"{error.msg} at line {error.lineno} column {error.colno}"
+        ) from error
+    if not isinstance(parsed, dict):
+        raise ValueError("generated JSON root must be an object")
     missing = [key for key in REQUIRED_REASONING_KEYS if key not in parsed]
     if missing:
         raise ValueError(f"generated reasoning is missing keys: {missing}")
@@ -135,7 +142,15 @@ class FrozenLLMReasoningGenerator:
             )
         prompt_length = tokens["input_ids"].shape[1]
         results = []
-        for row in generated:
+        for index, row in enumerate(generated):
             raw = self.tokenizer.decode(row[prompt_length:], skip_special_tokens=True).strip()
-            results.append(GeneratedReasoning(raw_text=raw, parsed=parse_reasoning_json(raw)))
+            try:
+                parsed = parse_reasoning_json(raw)
+            except ValueError as error:
+                hit_token_limit = row.shape[0] >= prompt_length + max_new_tokens
+                raise ValueError(
+                    f"reasoning case {index} failed schema parsing; "
+                    f"hit_token_limit={hit_token_limit}; generated_chars={len(raw)}; {error}"
+                ) from error
+            results.append(GeneratedReasoning(raw_text=raw, parsed=parsed))
         return results

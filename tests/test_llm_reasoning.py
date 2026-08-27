@@ -27,6 +27,25 @@ class ReasoningJSONTest(unittest.TestCase):
                 '"retrieval_strategy":"y","retrieval_plan":{},"constraints":[]}'
             )
 
+    def test_reports_truncated_nested_json_as_invalid(self):
+        with self.assertRaisesRegex(ValueError, "incomplete or invalid"):
+            parse_reasoning_json(
+                '{"intent":"x","evidence":["view=41"],'
+                '"retrieval_strategy":"y","retrieval_plan":'
+                '{"priority_behaviors":["view"]}'
+            )
+
+    def test_ignores_text_after_first_complete_object(self):
+        parsed = parse_reasoning_json(
+            '{"intent":"x","evidence":["view=41"],'
+            '"retrieval_strategy":"y",'
+            '"retrieval_plan":{"priority_behaviors":["view"],'
+            '"recency":"recent","prefer_repeated_items":false,'
+            '"diversity":"high"},"constraints":["不猜目标"]}'
+            ' trailing {not json}'
+        )
+        self.assertEqual(parsed["retrieval_plan"]["recency"], "recent")
+
 
 if __name__ == "__main__":
     unittest.main()
