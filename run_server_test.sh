@@ -8,9 +8,9 @@ cd "$project_dir"
 python scripts/train_retailrocket.py \
     --events data/raw/retailrocket/events.csv \
     --sid-registry checkpoints/retailrocket_attention_context_instruction/igr_q2i/sid_registry.json \
-    --output-dir checkpoints/retailrocket_text_instruction/igr_text_q2i \
+    --output-dir checkpoints/retailrocket_text_instruction/igr_generic_q2i \
     --device cuda \
-    --variant igr_text_q2i \
+    --variant igr_generic_q2i \
     --history-context-instruction \
     --history-context-pooling attention \
     --max-history 20 \
