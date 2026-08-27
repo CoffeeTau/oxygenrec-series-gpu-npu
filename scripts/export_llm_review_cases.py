@@ -20,6 +20,7 @@ from oxygenrec.data import (
     build_next_item_samples, load_retailrocket_events,
 )
 from oxygenrec.model import OxygenRECConfig, OxygenRECModel
+from oxygenrec.instructions import build_history_instruction, encode_instructions
 from oxygenrec.sid import PrefixTrie, SIDRegistry
 
 
@@ -35,10 +36,9 @@ def reasoning_proxy(sample) -> dict:
     ]
     repeated = Counter(event.item_id for event in sample.history)
     repeated_count = sum(count > 1 for count in repeated.values())
-    if high_intent:
-        intent = "最近存在加购或购买等高意图行为，优先检索相关历史商品。"
-    else:
-        intent = "最近以浏览行为为主，结合重复访问和长期历史判断兴趣。"
+    intent, instruction_evidence = build_history_instruction(
+        [event.behavior.value for event in sample.history]
+    )
     return {
         "kind": "deterministic_public_proxy_not_slow_llm_output",
         "observations": {
@@ -48,6 +48,7 @@ def reasoning_proxy(sample) -> dict:
             "repeated_item_kinds": repeated_count,
         },
         "instruction_zh": intent,
+        "instruction_evidence": list(instruction_evidence),
     }
 
 
@@ -72,7 +73,8 @@ def render_markdown(records: list[dict]) -> str:
             f"- Reasoning 类型：`{proxy['kind']}`",
             f"- Review instruction：{proxy['instruction_zh']}",
             f"- 模型实际 reasoning source：`{conditioning['reasoning_source']}`",
-            f"- Slow LLM 文本实际输入：`{conditioning['slow_llm_text_used']}`",
+        f"- 公开代理文本实际输入：`{conditioning['proxy_text_used']}`",
+        f"- Slow LLM 文本实际输入：`{conditioning['slow_llm_text_used']}`",
             "",
             "### 行为证据", "",
             f"- 历史长度：{proxy['observations']['history_length']}",
@@ -172,15 +174,28 @@ def main() -> int:
         target = torch.tensor(raw.target_sids, device=device)
         scenario = torch.tensor(raw.scenario_ids, device=device)
         trigger = short[:, -1]
+        proxy = reasoning_proxy(sample)
+        instruction_features = None
+        if config.instruction_feature_size:
+            instruction_features = torch.tensor(
+                encode_instructions(
+                    [proxy["instruction_zh"]], config.instruction_feature_size
+                ),
+                dtype=torch.float32, device=device,
+            )
+            # Match the leakage-free igr_text_q2i training configuration.
+            scenario = torch.zeros_like(scenario)
         with torch.inference_mode():
             diagnostic = model(
                 short, short_mask, target_sids=target, scenario_ids=scenario,
+                instruction_features=instruction_features,
                 trigger_sids=trigger, long_history_sids=long,
                 long_history_padding_mask=long_mask,
             )
             beam = model.beam_search(
                 short, short_mask, trie, beam_width=args.beam_width,
-                scenario_ids=scenario, trigger_sids=trigger,
+                scenario_ids=scenario, instruction_features=instruction_features,
+                trigger_sids=trigger,
                 long_history_sids=long, long_history_padding_mask=long_mask,
             )
         selected_indices = diagnostic.igr_indices[0].cpu().tolist()
@@ -237,11 +252,16 @@ def main() -> int:
                 "behavior": sample.target.behavior.value,
                 "sid": list(target_codes),
             },
-            "reasoning_review_proxy": reasoning_proxy(sample),
+            "reasoning_review_proxy": proxy,
             "actual_model_conditioning": {
-                "scenario_id": raw.scenario_ids[0],
+                "scenario_id": int(scenario[0].item()),
                 "trigger_sid": list(raw.short_history_sids[0][-1]),
-                "reasoning_source": "learned_fallback_plus_history_context_attention",
+                "reasoning_source": (
+                    "hashed_proxy_text_plus_history_context_attention"
+                    if instruction_features is not None else
+                    "learned_fallback_plus_history_context_attention"
+                ),
+                "proxy_text_used": instruction_features is not None,
                 "slow_llm_text_used": False,
             },
             "igr": {
