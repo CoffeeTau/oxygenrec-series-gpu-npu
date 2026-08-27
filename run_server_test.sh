@@ -5,4 +5,4 @@ set -euo pipefail
 project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$project_dir"
 
-python scripts/validate_contextual_instruction_input.py --device cuda
+python scripts/validate_instruction_retrieval_control.py --device cuda
