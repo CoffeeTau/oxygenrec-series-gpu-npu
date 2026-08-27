@@ -5,7 +5,9 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from oxygenrec.instructions import ContextualInstruction, InstructionStore, hash_instruction
+from oxygenrec.instructions import (
+    ContextualInstruction, InstructionStore, build_history_instruction, hash_instruction,
+)
 
 
 class ContextualInstructionTest(unittest.TestCase):
@@ -26,6 +28,15 @@ class ContextualInstructionTest(unittest.TestCase):
             path = Path(directory) / "instructions.jsonl"
             InstructionStore.save(path, [record])
             self.assertEqual(InstructionStore.load(path), [record])
+
+    def test_history_instruction_uses_only_prior_behaviors(self):
+        text, evidence = build_history_instruction(
+            ["view", "view", "view", "addtocart"]
+        )
+        self.assertIn("高意图", text)
+        self.assertIn("recent_high_intent=1", evidence)
+        with self.assertRaises(ValueError):
+            build_history_instruction([])
 
 
 if __name__ == "__main__":

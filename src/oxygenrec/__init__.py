@@ -4,7 +4,9 @@ from .sid import PrefixTrie, SIDRegistry, SemanticID
 from .quantization import ReferenceResidualKMeans, ResidualKMeansModel
 from .sid_metrics import SIDDiagnostics, compute_sid_diagnostics
 from .evaluation import RankingMetrics, evaluate_sid_ranking
-from .instructions import ContextualInstruction, InstructionStore, hash_instruction
+from .instructions import (
+    ContextualInstruction, InstructionStore, build_history_instruction, hash_instruction,
+)
 
 __all__ = [
     "PrefixTrie",
@@ -16,6 +18,7 @@ __all__ = [
     "SemanticID",
     "ContextualInstruction",
     "InstructionStore",
+    "build_history_instruction",
     "compute_sid_diagnostics",
     "evaluate_sid_ranking",
     "hash_instruction",

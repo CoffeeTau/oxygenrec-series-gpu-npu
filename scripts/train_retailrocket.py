@@ -26,6 +26,7 @@ from oxygenrec.data import (
     load_retailrocket_events,
 )
 from oxygenrec.evaluation import evaluate_sid_ranking
+from oxygenrec.instructions import build_history_instruction, encode_instructions
 from oxygenrec.model import OxygenRECConfig, OxygenRECModel
 from oxygenrec.sid import PrefixTrie
 from oxygenrec.sid import SIDRegistry
@@ -49,7 +50,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--long-history", type=int, default=100)
     parser.add_argument("--igr-top-k", type=int, default=10)
     parser.add_argument(
-        "--variant", choices=("base", "behavior", "behavior_strength_decay", "instruction", "q2i", "igr", "igr_q2i"),
+        "--variant", choices=("base", "behavior", "behavior_strength_decay", "instruction", "q2i", "igr", "igr_q2i", "igr_text_q2i"),
         default="base",
     )
     parser.add_argument("--q2i-weight", type=float, default=0.2)
@@ -86,7 +87,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def tensor_batch(samples, registry, args, device):
-    uses_igr = args.variant in {"igr", "igr_q2i"}
+    uses_igr = args.variant in {"igr", "igr_q2i", "igr_text_q2i"}
     if uses_igr:
         batch = build_long_short_sid_model_batch(
             samples, registry, short_history_items=args.max_history,
@@ -105,6 +106,19 @@ def tensor_batch(samples, registry, args, device):
         # strictly-prior item is the paper-supported trigger-item proxy, making
         # the query user/context dependent instead of one vector per behavior.
         result["trigger_sids"] = result["history_sids"][:, -1, :]
+        if args.variant == "igr_text_q2i":
+            texts = [
+                build_history_instruction(
+                    [event.behavior.value for event in sample.history]
+                )[0]
+                for sample in samples
+            ]
+            result["instruction_features"] = torch.tensor(
+                encode_instructions(texts, 64), dtype=torch.float32, device=device,
+            )
+            # A target behavior is unavailable at inference time. The text
+            # variant therefore uses a generic scenario and history-only text.
+            result["scenario_ids"] = torch.zeros_like(result["scenario_ids"])
         return result
     batch = build_sid_model_batch(samples, registry, max_history_items=args.max_history)
     result = {
@@ -151,7 +165,7 @@ def validate(model, samples, registry, trie, args, device):
         batch = tensor_batch(sample_batch, registry, args, device)
         target_sids = batch.pop("target_sids")
         batch.pop("sample_weights", None)
-        if args.variant in {"igr", "igr_q2i"}:
+        if args.variant in {"igr", "igr_q2i", "igr_text_q2i"}:
             diagnostic = model(target_sids=target_sids, **batch)
             long_sids = batch["long_history_sids"]
             long_mask = batch["long_history_padding_mask"]
@@ -267,7 +281,7 @@ def main() -> int:
     filtered_events = [event for event in events if event.item_id in in_vocabulary]
     del events
     print("stage=build_samples")
-    uses_igr = args.variant in {"igr", "igr_q2i"}
+    uses_igr = args.variant in {"igr", "igr_q2i", "igr_text_q2i"}
     matched_cohort = uses_igr or args.matched_igr_cohort
     samples = build_next_item_samples(
         filtered_events,
@@ -303,16 +317,17 @@ def main() -> int:
         feedforward_size=args.hidden_size * 4,
         max_history_items=args.max_history,
         scenario_vocab_size=3 if args.variant in {"instruction", "q2i", "igr", "igr_q2i"} else 1,
+        instruction_feature_size=64 if args.variant == "igr_text_q2i" else 0,
         behavior_vocab_size=3 if args.variant in {"behavior", "behavior_strength_decay"} else 0,
         behavior_time_decay=0.05 if args.variant == "behavior_strength_decay" else 0.0,
         igr_top_k=args.igr_top_k if uses_igr else 0,
-        q2i_weight=args.q2i_weight if args.variant in {"q2i", "igr_q2i"} else 0.0,
+        q2i_weight=args.q2i_weight if args.variant in {"q2i", "igr_q2i", "igr_text_q2i"} else 0.0,
         use_history_context_instruction=args.history_context_instruction,
         history_context_pooling=args.history_context_pooling,
     )
     model = OxygenRECModel(config).to(device)
     if args.retriever_init_checkpoint is not None:
-        if args.variant not in {"igr", "igr_q2i"}:
+        if args.variant not in {"igr", "igr_q2i", "igr_text_q2i"}:
             raise ValueError("retriever initialization is only valid for IGR variants")
         source = torch.load(
             args.retriever_init_checkpoint, map_location=device, weights_only=False
@@ -411,12 +426,12 @@ def main() -> int:
         torch.save(checkpoint, args.output_dir / f"epoch-{epoch}.pt")
         q2i_summary = (
             f" q2i_loss={total_q2i_loss / batches:.6f}"
-            if args.variant in {"q2i", "igr_q2i"} else ""
+            if args.variant in {"q2i", "igr_q2i", "igr_text_q2i"} else ""
         )
         mean_loss = total_loss / batches
         mean_ntp_loss = total_ntp_loss / batches
         epoch_identity_error = 0.0
-        if args.variant in {"q2i", "igr_q2i"}:
+        if args.variant in {"q2i", "igr_q2i", "igr_text_q2i"}:
             mean_q2i_loss = total_q2i_loss / batches
             reconstructed = mean_ntp_loss + config.q2i_weight * mean_q2i_loss
             epoch_identity_error = abs(mean_loss - reconstructed)
@@ -438,6 +453,7 @@ def main() -> int:
             f"repeat_recent={retrieval['repeat_recent_recall']} "
             f"repeat_random={retrieval['repeat_random_expected_recall']} "
             f"repeat_lift={retrieval['repeat_lift_over_random']} "
+            f"q2i_alignment={retrieval['q2i_alignment']} "
             f"repeat_eligible={retrieval['repeat_eligible']} "
             f"behavior_metrics={json.dumps(retrieval['behavior_metrics'], sort_keys=True)}"
         )
@@ -451,7 +467,7 @@ def main() -> int:
             "ntp_loss": mean_ntp_loss,
             "q2i_loss": (
                 total_q2i_loss / batches
-                if args.variant in {"q2i", "igr_q2i"} else None
+                if args.variant in {"q2i", "igr_q2i", "igr_text_q2i"} else None
             ),
             "q2i_weight": config.q2i_weight,
             "loss_identity_error": max_loss_identity_error,

@@ -32,6 +32,28 @@ class ContextualInstruction:
     version: str = "v1"
 
 
+def build_history_instruction(behaviors: Sequence[str]) -> tuple[str, tuple[str, ...]]:
+    """Build a leakage-free instruction from strictly prior behavior names."""
+
+    if not behaviors:
+        raise ValueError("behaviors must not be empty")
+    recent = tuple(behaviors[-5:])
+    high_intent = sum(name in {"addtocart", "transaction"} for name in recent)
+    repeated_views = sum(name == "view" for name in recent)
+    evidence = (
+        f"history_events={len(behaviors)}",
+        f"recent_high_intent={high_intent}",
+        f"recent_views={repeated_views}",
+    )
+    if high_intent:
+        text = "近期历史包含加购或购买等高意图行为，优先检索相关历史商品。"
+    elif repeated_views >= 3:
+        text = "近期以连续浏览为主，结合长期历史检索稳定兴趣商品。"
+    else:
+        text = "近期行为证据较弱，扩大长期历史检索范围并保持候选多样性。"
+    return text, evidence
+
+
 def instruction_tokens(text: str) -> tuple[str, ...]:
     """Return simple language-independent tokens without external models."""
 
