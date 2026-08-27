@@ -59,7 +59,7 @@ def main() -> None:
     generator = FrozenLLMReasoningGenerator(
         args.model_path, device=args.device, dtype=args.dtype,
     )
-    outputs = generator.generate(prompts)
+    outputs = generator.generate(prompts, max_new_tokens=256)
     records = []
     for case, prompt, output in zip(cases, prompts, outputs, strict=True):
         records.append({
@@ -69,7 +69,7 @@ def main() -> None:
             "review_questions": [
                 "evidence是否全部来自输入？",
                 "是否泄漏或猜测下一行为/目标商品？",
-                "retrieval_strategy是否能转换为可执行检索约束？",
+                "retrieval_plan是否与证据一致且可直接转换为检索约束？",
             ],
         })
     args.output.parent.mkdir(parents=True, exist_ok=True)
@@ -86,6 +86,7 @@ def main() -> None:
             f"- Intent：{reasoning['intent']}",
             f"- Evidence：`{reasoning['evidence']}`",
             f"- Retrieval strategy：{reasoning['retrieval_strategy']}",
+            f"- Retrieval plan：`{reasoning['retrieval_plan']}`",
             f"- Constraints：`{reasoning['constraints']}`", "",
             "### 人工检查", "",
         ])

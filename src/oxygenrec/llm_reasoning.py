@@ -9,7 +9,7 @@ from typing import Sequence
 
 
 REQUIRED_REASONING_KEYS = (
-    "intent", "evidence", "retrieval_strategy", "constraints",
+    "intent", "evidence", "retrieval_strategy", "retrieval_plan", "constraints",
 )
 
 
@@ -23,8 +23,12 @@ def reasoning_system_prompt() -> str:
     return (
         "你是电商检索规划器。只能使用用户提供的历史证据，不得猜测下一次真实行为、"
         "目标商品或未提供的属性。只输出一个JSON对象，不输出Markdown。JSON必须包含"
-        "intent、evidence、retrieval_strategy、constraints四个字段；evidence和constraints"
-        "必须是字符串数组，其余字段必须是简短字符串。"
+        "intent、evidence、retrieval_strategy、retrieval_plan、constraints五个字段。"
+        "evidence必须是1到6条聚合事实，不能逐条重复view；constraints必须是字符串数组；"
+        "intent和retrieval_strategy必须是简短字符串。retrieval_plan必须是JSON对象，且只包含"
+        "priority_behaviors（只能从view/addtocart/transaction选择的数组）、recency"
+        "（recent/long_term/balanced之一）、prefer_repeated_items（布尔值）和diversity"
+        "（low/medium/high之一）。"
     )
 
 
@@ -48,6 +52,24 @@ def parse_reasoning_json(text: str) -> dict[str, object]:
             isinstance(value, str) for value in parsed[key]
         ):
             raise ValueError(f"{key} must be a list of strings")
+    if not 1 <= len(parsed["evidence"]) <= 6:
+        raise ValueError("evidence must contain 1 to 6 aggregated facts")
+    plan = parsed["retrieval_plan"]
+    if not isinstance(plan, dict) or set(plan) != {
+        "priority_behaviors", "recency", "prefer_repeated_items", "diversity",
+    }:
+        raise ValueError("retrieval_plan has the wrong fields")
+    priorities = plan["priority_behaviors"]
+    if not isinstance(priorities, list) or not priorities or any(
+        value not in {"view", "addtocart", "transaction"} for value in priorities
+    ):
+        raise ValueError("retrieval_plan priority_behaviors is invalid")
+    if plan["recency"] not in {"recent", "long_term", "balanced"}:
+        raise ValueError("retrieval_plan recency is invalid")
+    if not isinstance(plan["prefer_repeated_items"], bool):
+        raise ValueError("retrieval_plan prefer_repeated_items must be boolean")
+    if plan["diversity"] not in {"low", "medium", "high"}:
+        raise ValueError("retrieval_plan diversity is invalid")
     return parsed
 
 
@@ -74,6 +96,7 @@ class FrozenLLMReasoningGenerator:
         self.tokenizer = AutoTokenizer.from_pretrained(
             path, local_files_only=True, trust_remote_code=False,
         )
+        self.tokenizer.padding_side = "left"
         self.model = AutoModelForCausalLM.from_pretrained(
             path, local_files_only=True, trust_remote_code=False,
             dtype=dtype_by_name[dtype], low_cpu_mem_usage=True,
@@ -101,9 +124,14 @@ class FrozenLLMReasoningGenerator:
         )
         tokens = {name: value.to(self.device) for name, value in tokens.items()}
         with torch.inference_mode():
+            generation_config = self.model.generation_config
+            generation_config.do_sample = False
+            generation_config.temperature = None
+            generation_config.top_p = None
+            generation_config.top_k = None
             generated = self.model.generate(
-                **tokens, do_sample=False, max_new_tokens=max_new_tokens,
-                use_cache=True,
+                **tokens, generation_config=generation_config,
+                max_new_tokens=max_new_tokens, use_cache=True,
             )
         prompt_length = tokens["input_ids"].shape[1]
         results = []
