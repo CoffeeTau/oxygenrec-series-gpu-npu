@@ -17,6 +17,7 @@
 - <https://huggingface.co/Qwen/Qwen3-4B-Instruct-2507>
 - <https://huggingface.co/Qwen/Qwen3-4B-Instruct-2507/blob/main/config.json>
 - <https://github.com/QwenLM/Qwen3>
+- <https://modelscope.cn/qwen/Qwen3-4B-Instruct-2507>
 
 ## 2. 当前阶段边界
 
@@ -38,6 +39,9 @@
 ```text
 models/Qwen3-4B-Instruct-2507/
 ```
+
+服务器默认使用ModelScope官方镜像下载，具体操作见项目根目录
+`Qwen服务器接入操作指南.md`；Hugging Face仅保留为备用后端。
 
 也可以通过环境变量覆盖：
 

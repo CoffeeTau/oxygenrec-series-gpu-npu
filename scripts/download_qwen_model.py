@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Download one pinned Hugging Face model snapshot into the project."""
+"""Download the selected Qwen snapshot into the project."""
 
 from __future__ import annotations
 
@@ -10,39 +10,54 @@ from pathlib import Path
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--provider", choices=("modelscope", "huggingface"), default="modelscope",
+    )
     parser.add_argument("--repo-id", default="Qwen/Qwen3-4B-Instruct-2507")
     parser.add_argument(
         "--local-dir", type=Path,
         default=Path("models/Qwen3-4B-Instruct-2507"),
     )
-    parser.add_argument("--revision", default="main")
+    parser.add_argument(
+        "--revision", default=None,
+        help="Defaults to master for ModelScope and main for Hugging Face.",
+    )
     parser.add_argument("--max-workers", type=int, default=4)
     return parser.parse_args()
 
 
 def main() -> None:
-    try:
-        from huggingface_hub import HfApi, snapshot_download
-    except ImportError as exc:
-        raise RuntimeError(
-            "huggingface_hub is missing; install a version compatible with the "
-            "existing Transformers environment"
-        ) from exc
-
     args = parse_args()
     args.local_dir.mkdir(parents=True, exist_ok=True)
-    info = HfApi().model_info(args.repo_id, revision=args.revision)
-    commit = info.sha
+    revision = args.revision or ("master" if args.provider == "modelscope" else "main")
+    resolved_commit = None
+    if args.provider == "modelscope":
+        try:
+            from modelscope.hub.snapshot_download import snapshot_download
+        except ImportError as exc:
+            raise RuntimeError(
+                "modelscope is missing; install it from the company-approved PyPI mirror"
+            ) from exc
+    else:
+        try:
+            from huggingface_hub import HfApi, snapshot_download
+        except ImportError as exc:
+            raise RuntimeError("huggingface_hub is missing") from exc
+        resolved_commit = HfApi().model_info(args.repo_id, revision=revision).sha
+        revision = resolved_commit
     print(
-        f"stage=download repo={args.repo_id} revision={args.revision} "
-        f"commit={commit} local_dir={args.local_dir}"
+        f"stage=download provider={args.provider} repo={args.repo_id} "
+        f"revision={revision} local_dir={args.local_dir}"
     )
-    snapshot_download(
-        repo_id=args.repo_id,
-        revision=commit,
-        local_dir=args.local_dir,
-        max_workers=args.max_workers,
-    )
+    download_kwargs = {
+        "revision": revision,
+        "local_dir": str(args.local_dir),
+        "max_workers": args.max_workers,
+    }
+    if args.provider == "modelscope":
+        snapshot_download(model_id=args.repo_id, **download_kwargs)
+    else:
+        snapshot_download(repo_id=args.repo_id, **download_kwargs)
     required = (
         "config.json", "tokenizer_config.json", "tokenizer.json",
         "model.safetensors.index.json",
@@ -54,10 +69,12 @@ def main() -> None:
             f"download incomplete: missing={missing}, safetensor_shards={len(shards)}"
         )
     provenance = {
+        "provider": args.provider,
         "repo_id": args.repo_id,
-        "requested_revision": args.revision,
-        "resolved_commit": commit,
+        "requested_revision": revision,
+        "resolved_commit": resolved_commit,
         "safetensor_shards": [path.name for path in shards],
+        "safetensor_sizes": {path.name: path.stat().st_size for path in shards},
     }
     (args.local_dir / "MODEL_SOURCE.json").write_text(
         json.dumps(provenance, indent=2, sort_keys=True) + "\n",
@@ -67,7 +84,8 @@ def main() -> None:
         path.stat().st_size for path in args.local_dir.rglob("*") if path.is_file()
     )
     print(
-        f"OK model_dir={args.local_dir} commit={commit} "
+        f"OK provider={args.provider} model_dir={args.local_dir} "
+        f"revision={revision} "
         f"shards={len(shards)} size_gib={total_bytes / 1024**3:.3f}"
     )
 
