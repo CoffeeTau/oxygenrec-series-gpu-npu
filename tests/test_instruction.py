@@ -71,6 +71,23 @@ class InstructionQ2IIGRTest(unittest.TestCase):
         for left, right in zip(first, second):
             torch.testing.assert_close(left[0], right[0])
 
+    def test_executable_plan_runs_inside_model_igr(self):
+        from oxygenrec.retrieval_planning import compile_retrieval_plan
+
+        plans = [compile_retrieval_plan(
+            {"priority_behaviors": ["transaction", "view"], "recency": "balanced",
+             "prefer_repeated_items": True, "diversity": "high"},
+            {"view": 2, "transaction": 1},
+        )] * 2
+        output = self.model(
+            self.short, self.short_mask, instruction_features=self.features,
+            long_history_sids=self.long, long_history_padding_mask=self.long_mask,
+            long_history_behavior_ids=torch.tensor([[0, 2, 0, 0]] * 2),
+            retrieval_plans=plans,
+        )
+        self.assertEqual(tuple(output.igr_indices.shape), (2, 2))
+        self.assertTrue((output.igr_indices < 3).all())
+
 
 if __name__ == "__main__":
     unittest.main()

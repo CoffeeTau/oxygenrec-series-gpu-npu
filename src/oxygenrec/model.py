@@ -15,6 +15,7 @@ from torch import Tensor, nn
 import torch.nn.functional as F
 
 from .sid import PrefixTrie
+from .retrieval_planning import ExecutableRetrievalPlan, execute_retrieval_plan
 
 
 @dataclass(frozen=True)
@@ -189,6 +190,8 @@ class OxygenRECModel(nn.Module):
         trigger_sids: Tensor | None = None,
         long_history_sids: Tensor | None = None,
         long_history_padding_mask: Tensor | None = None,
+        long_history_behavior_ids: Tensor | None = None,
+        retrieval_plans: Sequence[ExecutableRetrievalPlan] | None = None,
         level_weights: Sequence[float] | Tensor | None = None,
     ) -> OxygenRECOutput:
         """Predict all SID levels with teacher forcing.
@@ -212,7 +215,9 @@ class OxygenRECModel(nn.Module):
         )
         encoder_sids, encoder_mask, igr_indices, igr_scores = self._augment_history(
             history_sids, history_padding_mask, long_history_sids,
-            long_history_padding_mask, query
+            long_history_padding_mask, query,
+            long_history_behavior_ids=long_history_behavior_ids,
+            retrieval_plans=retrieval_plans,
         )
         if long_history_sids is not None and history_behavior_ids is not None:
             raise ValueError("behavior-conditioned IGR requires long-history behavior IDs")
@@ -353,7 +358,9 @@ class OxygenRECModel(nn.Module):
 
     def _augment_history(
         self, short_sids: Tensor, short_mask: Tensor, long_sids: Tensor | None,
-        long_mask: Tensor | None, query: Tensor,
+        long_mask: Tensor | None, query: Tensor, *,
+        long_history_behavior_ids: Tensor | None = None,
+        retrieval_plans: Sequence[ExecutableRetrievalPlan] | None = None,
     ) -> tuple[Tensor, Tensor, Tensor | None, Tensor | None]:
         if long_sids is None:
             if long_mask is not None:
@@ -373,7 +380,17 @@ class OxygenRECModel(nn.Module):
             self.item_adapter(self._item_embedding(long_sids)).detach(), dim=-1
         )
         scores = torch.einsum("bd,bhd->bh", query, long_vectors).masked_fill(long_mask, float("-inf"))
-        top_scores, top_indices = scores.topk(self.config.igr_top_k, dim=1)
+        if retrieval_plans is None:
+            top_scores, top_indices = scores.topk(self.config.igr_top_k, dim=1)
+        else:
+            if long_history_behavior_ids is None:
+                raise ValueError("retrieval plans require long_history_behavior_ids")
+            if long_history_behavior_ids.shape != scores.shape:
+                raise ValueError("long_history_behavior_ids must match the long-history window")
+            top_indices, top_scores, _ = execute_retrieval_plan(
+                scores, long_sids, long_history_behavior_ids, long_mask,
+                retrieval_plans, top_k=self.config.igr_top_k,
+            )
         gathered = long_sids.gather(1, top_indices.unsqueeze(-1).expand(-1, -1, self.config.sid_levels))
         combined = torch.cat((short_sids, gathered), dim=1)
         combined_mask = torch.cat((short_mask, torch.zeros_like(top_indices, dtype=torch.bool)), dim=1)

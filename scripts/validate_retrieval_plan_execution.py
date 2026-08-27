@@ -12,6 +12,7 @@ sys.path.insert(0, str(ROOT / "src"))
 import torch
 
 from oxygenrec.retrieval_planning import compile_retrieval_plan, execute_retrieval_plan
+from oxygenrec.model import OxygenRECConfig, OxygenRECModel
 
 
 def main() -> None:
@@ -35,9 +36,30 @@ def main() -> None:
         raise RuntimeError("retrieval plans did not change any controlled selection")
     if not torch.isfinite(selected_scores).all() or not torch.isfinite(adjusted).all():
         raise RuntimeError("retrieval plan execution produced non-finite scores")
+    torch.manual_seed(17)
+    model = OxygenRECModel(OxygenRECConfig(
+        sid_width=8, hidden_size=16, attention_heads=4, encoder_layers=1,
+        decoder_layers=1, feedforward_size=32, dropout=0.0,
+        max_history_items=2, instruction_feature_size=4,
+        q2i_dimension=8, igr_top_k=3,
+    )).to(device).eval()
+    short = torch.tensor([[[5,5,5], [6,6,6]]] * len(plans), device=device)
+    short_mask = torch.zeros(len(plans), 2, dtype=torch.bool, device=device)
+    with torch.inference_mode():
+        model_output = model(
+            short, short_mask,
+            instruction_features=torch.randn(len(plans), 4, device=device),
+            long_history_sids=sids,
+            long_history_padding_mask=mask,
+            long_history_behavior_ids=behaviors,
+            retrieval_plans=plans,
+        )
+    if model_output.igr_indices is None or model_output.igr_indices.shape != (len(plans), 3):
+        raise RuntimeError("model IGR did not return plan-controlled indices")
     print(
         f"OK device={device} cases={len(records)} plan_changed={changed.tolist()} "
-        f"baseline={baseline.tolist()} selected={selected.tolist()}"
+        f"baseline={baseline.tolist()} selected={selected.tolist()} "
+        f"model_igr={model_output.igr_indices.tolist()}"
     )
 
 
