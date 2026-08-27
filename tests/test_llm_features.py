@@ -32,6 +32,11 @@ class LLMFeaturePromptTest(unittest.TestCase):
                 repeated_item_kinds=0,
             )
 
+    def test_pooling_contract_is_documented(self):
+        from oxygenrec.llm_features import FrozenLLMInstructionEncoder
+
+        self.assertIn("pooling", FrozenLLMInstructionEncoder.encode.__annotations__)
+
 
 @unittest.skipIf(torch is None, "PyTorch is not installed in this environment")
 class FrozenFeatureTensorBoundaryTest(unittest.TestCase):

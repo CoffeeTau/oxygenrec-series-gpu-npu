@@ -70,17 +70,19 @@ class FrozenLLMInstructionEncoder:
         )
         self.model = AutoModel.from_pretrained(
             path, local_files_only=True, trust_remote_code=False,
-            torch_dtype=dtype_by_name[dtype], low_cpu_mem_usage=True,
+            dtype=dtype_by_name[dtype], low_cpu_mem_usage=True,
         ).to(self.device).eval()
         self.model.requires_grad_(False)
         self.hidden_size = int(self.model.config.hidden_size)
 
-    def encode(self, texts: Sequence[str]) -> LLMFeatureBatch:
+    def encode(self, texts: Sequence[str], *, pooling: str = "mean") -> LLMFeatureBatch:
         import torch
         import torch.nn.functional as F
 
         if not texts or any(not text.strip() for text in texts):
             raise ValueError("texts must contain non-empty strings")
+        if pooling not in {"mean", "last_token"}:
+            raise ValueError("pooling must be mean or last_token")
         formatted = [
             self.tokenizer.apply_chat_template(
                 [{"role": "user", "content": text}], tokenize=False,
@@ -97,7 +99,16 @@ class FrozenLLMInstructionEncoder:
         with torch.inference_mode():
             hidden = self.model(**tokens, return_dict=True).last_hidden_state
             mask = tokens["attention_mask"].unsqueeze(-1).to(hidden.dtype)
-            pooled = (hidden * mask).sum(dim=1) / mask.sum(dim=1).clamp_min(1.0)
+            if pooling == "mean":
+                pooled = (hidden * mask).sum(dim=1) / mask.sum(dim=1).clamp_min(1.0)
+            else:
+                positions = torch.arange(hidden.shape[1], device=self.device)
+                last_indices = (
+                    tokens["attention_mask"] * positions.unsqueeze(0)
+                ).argmax(dim=1)
+                pooled = hidden[
+                    torch.arange(hidden.shape[0], device=self.device), last_indices
+                ]
             features = F.normalize(pooled.float(), dim=-1)
         # Tensors created in inference_mode cannot be saved for backward by
         # the trainable OxygenREC adapter.  Clone after leaving the context to

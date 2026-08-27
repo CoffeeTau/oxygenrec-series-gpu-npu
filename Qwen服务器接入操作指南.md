@@ -137,22 +137,22 @@ CUDA_VISIBLE_DEVICES=0 QWEN_MODEL_PATH=/实际模型目录 bash run_server_test.
 成功输出应包含：
 
 ```text
-OK device=cuda hidden_size=2560 tokens=(...) feature_delta=... \
-feature_cosine=... determinism_error=... logit_delta=... \
+OK device=cuda hidden_size=2560 tokens=(...) mean_delta=... \
+mean_cosine=... last_delta=... last_cosine=... determinism_error=... logit_delta=... \
 adapter_grad=... peak_allocated_gib=...
 ```
 
 验收标准：
 
 - `hidden_size=2560`；
-- `feature_delta>0`；
+- `mean_delta>0`且`last_delta>0`；
 - `determinism_error<=1e-6`；
 - `logit_delta>0`；
 - `adapter_grad>0`；
 - 没有CUDA OOM；
 - `peak_allocated_gib`明显低于单卡约44.40 GiB。
 
-`feature_cosine`用于观察两类行为prompt的区分程度，不设置人为通过阈值。
+`mean_cosine`和`last_cosine`用于选择更有区分度的池化方式，不设置人为通过阈值；本轮adapter使用last-token特征验证。
 
 ## 7. 常见问题
 

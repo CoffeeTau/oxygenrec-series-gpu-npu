@@ -47,11 +47,22 @@ def main() -> None:
         args.model_path, device=args.device, dtype=args.dtype,
         max_length=args.max_length,
     )
-    first = encoder.encode(prompts)
-    second = encoder.encode(prompts)
-    determinism_error = (first.features - second.features).abs().max().item()
-    feature_delta = torch.linalg.vector_norm(first.features[0] - first.features[1]).item()
-    cosine = torch.dot(first.features[0], first.features[1]).item()
+    mean_first = encoder.encode(prompts, pooling="mean")
+    mean_second = encoder.encode(prompts, pooling="mean")
+    last = encoder.encode(prompts, pooling="last_token")
+    determinism_error = (
+        mean_first.features - mean_second.features
+    ).abs().max().item()
+    mean_delta = torch.linalg.vector_norm(
+        mean_first.features[0] - mean_first.features[1]
+    ).item()
+    mean_cosine = torch.dot(
+        mean_first.features[0], mean_first.features[1]
+    ).item()
+    last_delta = torch.linalg.vector_norm(
+        last.features[0] - last.features[1]
+    ).item()
+    last_cosine = torch.dot(last.features[0], last.features[1]).item()
 
     # Keep all recommendation inputs identical. Any logit difference must come
     # from the real LLM features passed through the existing adapter boundary.
@@ -67,7 +78,7 @@ def main() -> None:
     targets = torch.tensor([[7, 8, 9], [7, 8, 9]], device=args.device)
     output = model(
         history, mask, target_sids=targets,
-        instruction_features=first.features,
+        instruction_features=last.features,
     )
     output.loss.backward()
     logit_delta = sum(
@@ -79,12 +90,13 @@ def main() -> None:
         torch.cuda.max_memory_allocated(args.device) / 1024**3
         if args.device.startswith("cuda") else 0.0
     )
-    if determinism_error > 1e-6 or feature_delta <= 0 or logit_delta <= 0 or adapter_grad <= 0:
+    if determinism_error > 1e-6 or mean_delta <= 0 or last_delta <= 0 or logit_delta <= 0 or adapter_grad <= 0:
         raise AssertionError("Qwen feature integration failed")
     print(
         f"OK device={args.device} hidden_size={encoder.hidden_size} "
-        f"tokens={first.token_counts} feature_delta={feature_delta:.6f} "
-        f"feature_cosine={cosine:.6f} determinism_error={determinism_error:.3e} "
+        f"tokens={mean_first.token_counts} mean_delta={mean_delta:.6f} "
+        f"mean_cosine={mean_cosine:.6f} last_delta={last_delta:.6f} "
+        f"last_cosine={last_cosine:.6f} determinism_error={determinism_error:.3e} "
         f"logit_delta={logit_delta:.6f} adapter_grad={adapter_grad:.6f} "
         f"peak_allocated_gib={peak_gib:.3f}"
     )

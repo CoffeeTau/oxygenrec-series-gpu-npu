@@ -25,7 +25,7 @@
 
 1. 从本地目录加载官方权重，不在训练脚本中隐式联网；
 2. 将严格早于目标的行为证据构造成无标签泄漏prompt；
-3. 使用官方chat template格式化prompt，冻结Qwen，mean-pool最后一层hidden state并L2归一化；
+3. 使用官方chat template格式化prompt，冻结Qwen，对比最后层hidden state的mean pooling与last-token pooling并L2归一化；
 4. 将2560维特征输入现有OxygenREC `instruction_feature_adapter`；
 5. 验证不同prompt产生不同特征、重复编码确定、logits变化和adapter梯度；
 6. 记录峰值GPU显存。
@@ -55,20 +55,20 @@ QWEN_MODEL_PATH=/实际模型目录 bash run_server_test.sh
 
 ```text
 OK device=cuda hidden_size=2560 tokens=(...) \
-feature_delta=... feature_cosine=... determinism_error=... \
+mean_delta=... mean_cosine=... last_delta=... last_cosine=... determinism_error=... \
 logit_delta=... adapter_grad=... peak_allocated_gib=...
 ```
 
 验收条件：
 
 - `hidden_size=2560`；
-- `feature_delta>0`；
+- `mean_delta>0`且`last_delta>0`；
 - `determinism_error<=1e-6`；
 - `logit_delta>0`；
 - `adapter_grad>0`；
 - 峰值显存低于单卡可用容量，并保留后续adapter训练空间。
 
-`feature_cosine`只用于观察两个行为prompt的区分程度，不预设必须低于某个主观阈值。
+两个cosine只用于比较池化区分度，不预设必须低于某个主观阈值；正式缓存前依据实测选择，不凭经验决定。
 
 ## 5. 后续阶段
 
