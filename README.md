@@ -56,6 +56,8 @@ model shapes, masks, loss, and validation commands are in
 is documented in [the training protocol](docs/training_protocol.md).
 中文总体进度见 [复现进度](复现进度.md)，逐次实验判断与修正过程见
 [复现实验日志](复现实验日志.md)。
+服务器直接下载并接入Qwen的逐步操作见
+[Qwen服务器接入操作指南](Qwen服务器接入操作指南.md)。
 
 ## Run the current tests
 

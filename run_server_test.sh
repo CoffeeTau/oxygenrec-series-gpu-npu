@@ -5,11 +5,10 @@ set -euo pipefail
 project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$project_dir"
 
-python scripts/export_llm_review_cases.py \
-    --events data/raw/retailrocket/events.csv \
-    --checkpoint checkpoints/retailrocket_text_instruction/igr_text_q2i/epoch-2.pt \
-    --sid-registry checkpoints/retailrocket_text_instruction/igr_text_q2i/sid_registry.json \
-    --output outputs/review/llm_cross_cases_text_instruction.jsonl \
+qwen_model_path="${QWEN_MODEL_PATH:-models/Qwen3-4B-Instruct-2507}"
+
+python scripts/validate_qwen_instruction_features.py \
+    --model-path "$qwen_model_path" \
     --device cuda \
-    --cases 5 \
-    --beam-width 5
+    --dtype bfloat16 \
+    --max-length 256

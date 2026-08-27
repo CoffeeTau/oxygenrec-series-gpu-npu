@@ -1,5 +1,8 @@
 # L20 server environment collection
 
+已整理并长期保留的2026-08-21服务器截图快照见：
+[`server_environment_snapshot_2026-08-21.md`](server_environment_snapshot_2026-08-21.md)。
+
 Copy `scripts/collect_server_env.py` to the server and run it inside the exact
 Python environment that will train OxygenREC:
 
@@ -22,4 +25,3 @@ The script does not collect arbitrary environment variables, API keys, SSH
 configuration, usernames, hostnames, GPU UUIDs, source code, or training data.
 Review the JSON before sending it if the server has additional confidentiality
 requirements.
-
