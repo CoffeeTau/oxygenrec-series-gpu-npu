@@ -84,9 +84,12 @@ def execute_retrieval_plan(
     history = semantic_scores.shape[1]
     positions = torch.linspace(0.0, 1.0, history, device=adjusted.device)
     for batch, plan in enumerate(plans):
-        for rank, behavior_id in enumerate(plan.priority_behavior_ids):
+        for behavior_id in plan.priority_behavior_ids:
             match = candidate_behavior_ids[batch] == behavior_id
-            adjusted[batch] = adjusted[batch] + match.to(adjusted.dtype) * (0.15 / (rank + 1))
+            # The schema defines a set of priority behaviors, not a ranked
+            # list. Treat every listed behavior equally unless a future schema
+            # explicitly supplies numeric weights.
+            adjusted[batch] = adjusted[batch] + match.to(adjusted.dtype) * 0.15
         if plan.recency == "recent":
             adjusted[batch] = adjusted[batch] + 0.15 * positions
         elif plan.recency == "balanced":

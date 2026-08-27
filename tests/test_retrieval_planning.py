@@ -50,6 +50,21 @@ class RetrievalPlanExecuteTest(unittest.TestCase):
         self.assertEqual(indices[0, 0].item(), 2)
         self.assertNotEqual(sids[0, indices[0, 0]].tolist(), sids[0, indices[0, 1]].tolist())
 
+    def test_priority_behavior_array_is_not_rank_weighted(self):
+        from oxygenrec.retrieval_planning import execute_retrieval_plan
+
+        scores = torch.tensor([[0.50, 0.50]])
+        sids = torch.tensor([[[1, 1, 1], [2, 2, 2]]])
+        behaviors = torch.tensor([[0, 1]])
+        mask = torch.zeros(1, 2, dtype=torch.bool)
+        plan = compile_retrieval_plan(
+            {"priority_behaviors": ["view", "addtocart"], "recency": "long_term",
+             "prefer_repeated_items": False, "diversity": "low"},
+            {"view": 1, "addtocart": 1},
+        )
+        _, _, adjusted = execute_retrieval_plan(scores, sids, behaviors, mask, [plan], top_k=2)
+        torch.testing.assert_close(adjusted[0, 0], adjusted[0, 1])
+
 
 if __name__ == "__main__":
     unittest.main()

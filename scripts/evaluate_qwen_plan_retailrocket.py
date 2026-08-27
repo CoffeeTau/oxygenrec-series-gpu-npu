@@ -30,7 +30,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--events", type=Path, required=True)
     parser.add_argument("--checkpoint", type=Path, required=True)
     parser.add_argument("--sid-registry", type=Path, required=True)
-    parser.add_argument("--model-path", type=Path, required=True)
+    parser.add_argument("--model-path", type=Path)
+    parser.add_argument("--reasoning-input", type=Path)
     parser.add_argument("--cases", type=int, default=8)
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--output", type=Path, default=Path("outputs/review/qwen_plan_retailrocket.jsonl"))
@@ -83,16 +84,27 @@ def main() -> None:
         }
         evidence_rows.append(evidence)
         prompts.append(build_behavior_prompt(**evidence))
-    generator = FrozenLLMReasoningGenerator(args.model_path, device=args.device, dtype="bfloat16")
-    reasoning_outputs = generator.generate(prompts, max_new_tokens=384)
-    del generator
-    torch.cuda.empty_cache()
+    if args.reasoning_input is None:
+        if args.model_path is None:
+            raise ValueError("--model-path is required unless --reasoning-input is provided")
+        generator = FrozenLLMReasoningGenerator(args.model_path, device=args.device, dtype="bfloat16")
+        reasoning_rows = [item.parsed for item in generator.generate(prompts, max_new_tokens=384)]
+        del generator
+        torch.cuda.empty_cache()
+    else:
+        replay = [
+            json.loads(line) for line in args.reasoning_input.read_text(encoding="utf-8").splitlines()
+            if line
+        ]
+        if len(replay) != len(validation):
+            raise ValueError("reasoning replay case count does not match validation cohort")
+        reasoning_rows = [row["reasoning"] for row in replay]
 
     records = []
     changed = before_target_hits = after_target_hits = 0
     before_high_intent = after_high_intent = 0
     for index, (sample, evidence, reasoning) in enumerate(
-        zip(validation, evidence_rows, reasoning_outputs, strict=True), start=1,
+        zip(validation, evidence_rows, reasoning_rows, strict=True), start=1,
     ):
         raw = build_long_short_sid_model_batch(
             [sample], registry, short_history_items=config.max_history_items,
@@ -105,7 +117,7 @@ def main() -> None:
         long_behaviors = torch.tensor(raw.long_history_behavior_ids, device=device)
         scenario = torch.tensor(raw.scenario_ids, device=device)
         target = tuple(raw.target_sids[0])
-        plan = compile_retrieval_plan(reasoning.parsed["retrieval_plan"], evidence["behavior_counts"])
+        plan = compile_retrieval_plan(reasoning["retrieval_plan"], evidence["behavior_counts"])
         with torch.inference_mode():
             baseline = model(
                 short, short_mask, scenario_ids=scenario,
@@ -129,7 +141,7 @@ def main() -> None:
         after_high_intent += sum(item in {1, 2} for item in after_behaviors)
         records.append({
             "case": index, "input_evidence": evidence,
-            "reasoning": reasoning.parsed, "baseline_indices": before,
+            "reasoning": reasoning, "baseline_indices": before,
             "planned_indices": after, "target_sid_hit_before": target in before_sids,
             "target_sid_hit_after": target in after_sids,
             "high_intent_selected_before": sum(item in {1, 2} for item in before_behaviors),
