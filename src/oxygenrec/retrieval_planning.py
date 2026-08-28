@@ -1,4 +1,4 @@
-"""Compile Slow-LLM plans into bounded, deterministic IGR controls."""
+"""把 Slow-LLM 输出编译成有边界、可复现的 IGR 数值控制。"""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ BEHAVIOR_IDS = {"view": 0, "addtocart": 1, "transaction": 2}
 
 @dataclass(frozen=True)
 class ExecutableRetrievalPlan:
+    """执行层真正消费的白名单计划；不包含任何自由文本。"""
     priority_behavior_ids: tuple[int, ...]
     recency: str
     prefer_repeated_items: bool
@@ -20,11 +21,10 @@ class ExecutableRetrievalPlan:
 def compile_retrieval_plan(
     plan: Mapping[str, object], behavior_counts: Mapping[str, int],
 ) -> ExecutableRetrievalPlan:
-    """Compile only schema fields supported by the retrieval implementation.
+    """只编译检索实现明确支持的 schema 字段。
 
-    A generated priority is accepted only when that behavior exists in the
-    supplied history. Free-form intent, evidence and strategy text never enter
-    scoring.
+    Qwen 生成的优先行为必须确实出现在历史中；intent、evidence、strategy
+    等自由文本绝不进入打分，避免语言模型无依据解释污染检索。
     """
 
     priorities = plan.get("priority_behaviors")
@@ -59,12 +59,11 @@ def execute_retrieval_plan(
     semantic_scores, candidate_sids, candidate_behavior_ids, padding_mask,
     plans: Sequence[ExecutableRetrievalPlan], *, top_k: int,
 ):
-    """Apply bounded plan biases and diversity-aware top-k selection.
+    """在语义分数上施加有界计划偏置，再做考虑多样性的 top-k。
 
-    Semantic similarity remains the primary score. Plan controls contribute
-    small fixed biases: behavior priority, recency, repeated-item preference,
-    and duplicate-SID suppression. This function deliberately consumes no
-    generated natural-language fields.
+    输入形状：semantic_scores/behavior/mask=[B,H]，candidate_sids=[B,H,L]。
+    语义相似度仍是主分数；Plan 只增加行为优先、时效、重复商品和重复 SID
+    抑制等固定小偏置。本函数故意不接收生成的自然语言字段。
     """
 
     import torch
@@ -80,15 +79,14 @@ def execute_retrieval_plan(
     if top_k < 1 or ((~padding_mask).sum(dim=1) < top_k).any():
         raise ValueError("top_k exceeds valid candidates")
 
+    # clone 保留原始 semantic score，便于 paired baseline/plan 审计。
     adjusted = semantic_scores.clone()
     history = semantic_scores.shape[1]
     positions = torch.linspace(0.0, 1.0, history, device=adjusted.device)
     for batch, plan in enumerate(plans):
         for behavior_id in plan.priority_behavior_ids:
             match = candidate_behavior_ids[batch] == behavior_id
-            # The schema defines a set of priority behaviors, not a ranked
-            # list. Treat every listed behavior equally unless a future schema
-            # explicitly supplies numeric weights.
+            # schema 定义的是优先行为“集合”而非排序列表；没有显式数值权重前必须等权。
             adjusted[batch] = adjusted[batch] + match.to(adjusted.dtype) * 0.15
         if plan.recency == "recent":
             adjusted[batch] = adjusted[batch] + 0.15 * positions
@@ -103,6 +101,7 @@ def execute_retrieval_plan(
                     adjusted[batch, index] = adjusted[batch, index] + 0.10
     adjusted = adjusted.masked_fill(padding_mask, float("-inf"))
 
+    # 逐项选择允许在已选 SID 的完全重复项上施加 medium/high 多样性约束。
     selected_rows = []
     selected_scores = []
     for batch, plan in enumerate(plans):

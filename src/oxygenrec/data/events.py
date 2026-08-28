@@ -1,4 +1,4 @@
-"""Canonical interaction events and source-specific readers."""
+"""统一交互事件定义，以及不同原始数据集到统一格式的读取器。"""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from typing import Iterable, Mapping
 
 
 class Behavior(str, Enum):
-    """Behavior labels supported by the first OxygenREC benchmark."""
+    """当前 OxygenREC 公开数据实验支持的三种行为。"""
 
     VIEW = "view"
     ADD_TO_CART = "addtocart"
@@ -19,11 +19,10 @@ class Behavior(str, Enum):
 
 @dataclass(frozen=True, order=True)
 class InteractionEvent:
-    """A dataset-neutral, time-ordered user-item interaction.
+    """与具体数据集无关、可按时间排序的一条用户-商品交互。
 
-    ``source_row`` is a deterministic tie breaker for storage and diagnostics.
-    Sample construction deliberately does not use same-timestamp rows as history,
-    because their causal order is not established by RetailRocket.
+    ``source_row`` 用作稳定的并列排序键，方便复现与排查。RetailRocket 没有
+    给出同一毫秒内事件的因果顺序，因此构造样本时，同时间事件不能互相作为历史。
     """
 
     timestamp_ms: int
@@ -56,7 +55,7 @@ _RETAILROCKET_COLUMNS = {
 def retailrocket_event_from_row(
     row: Mapping[str, str], *, source_row: int
 ) -> InteractionEvent:
-    """Convert one ``events.csv`` row to the canonical schema."""
+    """把 RetailRocket ``events.csv`` 的一行转换为统一事件对象。"""
 
     try:
         behavior = Behavior(row["event"].strip().lower())
@@ -75,9 +74,9 @@ def retailrocket_event_from_row(
 
 
 def load_retailrocket_events(path: str | Path) -> Iterable[InteractionEvent]:
-    """Stream canonical events from RetailRocket ``events.csv``.
+    """逐行读取 RetailRocket ``events.csv`` 并产出统一事件。
 
-    The generator keeps memory use bounded for the roughly 2.76M-row source file.
+    使用生成器而不是一次性加载，从而控制约 276 万行原始文件的读取内存。
     """
 
     with Path(path).open("r", encoding="utf-8", newline="") as stream:
@@ -88,4 +87,3 @@ def load_retailrocket_events(path: str | Path) -> Iterable[InteractionEvent]:
             raise ValueError(f"RetailRocket events CSV is missing columns: {sorted(missing)}")
         for source_row, row in enumerate(reader, start=2):
             yield retailrocket_event_from_row(row, source_row=source_row)
-

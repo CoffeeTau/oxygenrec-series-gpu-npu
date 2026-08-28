@@ -1,8 +1,7 @@
-"""Frozen Hugging Face LLM features for OxygenREC instructions.
+"""从冻结的本地开源 LLM 提取 OxygenREC instruction 特征。
 
-This optional module replaces the deterministic hash proxy with contextual
-hidden states from a locally supplied open-weight model.  It does not download
-weights implicitly and keeps the LLM frozen during the first integration stage.
+该可选模块用本地开放权重模型的上下文 hidden state 替代早期 hash 代理。
+代码不会隐式联网下载权重；第一阶段始终冻结 LLM，只训练 OxygenREC 侧适配层。
 """
 
 from __future__ import annotations
@@ -14,6 +13,7 @@ from typing import Sequence
 
 @dataclass(frozen=True)
 class LLMFeatureBatch:
+    """LLM 特征及每条输入的有效 token 数。features 实际为 Tensor[B,D]。"""
     features: object
     token_counts: tuple[int, ...]
 
@@ -22,7 +22,7 @@ def build_behavior_prompt(
     *, history_length: int, behavior_counts: dict[str, int],
     recent_behaviors: Sequence[str], repeated_item_kinds: int,
 ) -> str:
-    """Build a structured, target-free prompt from strictly prior evidence."""
+    """只用严格早于 target 的行为证据构造结构化、无标签泄漏的 prompt。"""
 
     if history_length < 1 or not recent_behaviors:
         raise ValueError("history evidence must not be empty")
@@ -42,7 +42,7 @@ def build_behavior_prompt(
 
 
 class FrozenLLMInstructionEncoder:
-    """Mean-pool normalized hidden states from a local Transformers model."""
+    """加载本地 Transformers 模型，冻结参数并提取归一化 hidden state。"""
 
     def __init__(
         self, model_path: str | Path, *, device: str = "cuda",
@@ -76,6 +76,7 @@ class FrozenLLMInstructionEncoder:
         self.hidden_size = int(self.model.config.hidden_size)
 
     def encode(self, texts: Sequence[str], *, pooling: str = "mean") -> LLMFeatureBatch:
+        """编码文本为 Tensor[B,D]；支持有效 token 均值或最后有效 token 池化。"""
         import torch
         import torch.nn.functional as F
 
@@ -96,6 +97,7 @@ class FrozenLLMInstructionEncoder:
             max_length=self.max_length, return_tensors="pt",
         )
         tokens = {name: value.to(self.device) for name, value in tokens.items()}
+        # Qwen 只做特征提取，因此不保存它的梯度图和中间激活。
         with torch.inference_mode():
             hidden = self.model(**tokens, return_dict=True).last_hidden_state
             mask = tokens["attention_mask"].unsqueeze(-1).to(hidden.dtype)
@@ -110,9 +112,8 @@ class FrozenLLMInstructionEncoder:
                     torch.arange(hidden.shape[0], device=self.device), last_indices
                 ]
             features = F.normalize(pooled.float(), dim=-1)
-        # Tensors created in inference_mode cannot be saved for backward by
-        # the trainable OxygenREC adapter.  Clone after leaving the context to
-        # produce an ordinary detached tensor while keeping Qwen frozen.
+        # inference_mode 创建的 tensor 不能被可训练 Linear 保存用于 backward。
+        # 离开上下文后 clone 成普通 detached tensor：Qwen 仍冻结，adapter 可反传。
         features = features.clone()
         counts = tuple(int(value) for value in tokens["attention_mask"].sum(dim=1).tolist())
         return LLMFeatureBatch(features=features, token_counts=counts)

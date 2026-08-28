@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Train controlled OxygenREC ablations on bounded RetailRocket data."""
+"""在有界 RetailRocket 样本上训练并比较 OxygenREC 消融变体。"""
 
 from __future__ import annotations
 
@@ -33,6 +33,7 @@ from oxygenrec.sid import SIDRegistry
 
 
 def parse_args() -> argparse.Namespace:
+    """定义数据、模型、消融变体、训练和评测参数。"""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--events", type=Path, default=Path("data/raw/retailrocket/events.csv"))
     parser.add_argument("--output-dir", type=Path, default=Path("checkpoints/retailrocket_phase1"))
@@ -87,6 +88,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def tensor_batch(samples, registry, args, device):
+    """把 NextItemSample 转成模型 forward 可直接接收的 CUDA/CPU Tensor。"""
     uses_igr = args.variant in {"igr", "igr_q2i", "igr_generic_q2i", "igr_text_q2i"}
     if uses_igr:
         batch = build_long_short_sid_model_batch(
@@ -102,9 +104,8 @@ def tensor_batch(samples, registry, args, device):
             "long_history_sids": torch.tensor(batch.long_history_sids, dtype=torch.long, device=device),
             "long_history_padding_mask": torch.tensor(batch.long_history_padding_mask, dtype=torch.bool, device=device),
         }
-        # RetailRocket has no textual contextual instruction. The most recent
-        # strictly-prior item is the paper-supported trigger-item proxy, making
-        # the query user/context dependent instead of one vector per behavior.
+        # RetailRocket 没有原论文的文本 instruction。这里用严格早于 target 的
+        # 最近商品作为 trigger 代理，使 query 随用户上下文变化，而非每种行为一个常量。
         result["trigger_sids"] = result["history_sids"][:, -1, :]
         if args.variant == "igr_generic_q2i":
             result["scenario_ids"] = torch.zeros_like(result["scenario_ids"])
@@ -118,8 +119,7 @@ def tensor_batch(samples, registry, args, device):
             result["instruction_features"] = torch.tensor(
                 encode_instructions(texts, 64), dtype=torch.float32, device=device,
             )
-            # A target behavior is unavailable at inference time. The text
-            # variant therefore uses a generic scenario and history-only text.
+            # 推理时不知道 target 行为，因此文本变体只能用通用 scenario 和历史文本。
             result["scenario_ids"] = torch.zeros_like(result["scenario_ids"])
         return result
     batch = build_sid_model_batch(samples, registry, max_history_items=args.max_history)
@@ -149,12 +149,14 @@ def tensor_batch(samples, registry, args, device):
 
 
 def chunks(items, size):
+    """把样本列表切成不超过 size 的连续 mini-batch。"""
     for start in range(0, len(items), size):
         yield items[start : start + size]
 
 
 @torch.no_grad()
 def validate(model, samples, registry, trie, args, device):
+    """执行 beam 排序指标以及 IGR/Q2I 诊断，不构建梯度。"""
     model.eval()
     predictions = []
     targets = []
@@ -168,6 +170,7 @@ def validate(model, samples, registry, trie, args, device):
         target_sids = batch.pop("target_sids")
         batch.pop("sample_weights", None)
         if args.variant in {"igr", "igr_q2i", "igr_generic_q2i", "igr_text_q2i"}:
+            # teacher-forcing forward 用于读取 IGR 索引和 Q2I alignment 诊断。
             diagnostic = model(target_sids=target_sids, **batch)
             long_sids = batch["long_history_sids"]
             long_mask = batch["long_history_padding_mask"]
@@ -200,6 +203,7 @@ def validate(model, samples, registry, trie, args, device):
                 repeat_random_expected_hits += 1.0 - miss_probability
             if diagnostic.q2i_alignment_loss is not None:
                 q2i_alignments.append(float(diagnostic.q2i_alignment_loss))
+        # 真正的推荐排序来自 PrefixTrie 约束 beam search，而非上面的诊断 forward。
         output = model.beam_search(
             batch.pop("history_sids"), batch.pop("history_padding_mask"), trie,
             beam_width=args.beam_width, **batch,
@@ -252,6 +256,7 @@ def validate(model, samples, registry, trie, args, device):
 
 
 def main() -> int:
+    """串起事件读取、时间切分、SID 映射、训练、验证和 checkpoint 保存。"""
     args = parse_args()
     if args.igr_top_k > args.long_history:
         raise ValueError("igr-top-k cannot exceed long-history")
@@ -266,6 +271,7 @@ def main() -> int:
     minimum = min(event.timestamp_ms for event in events)
     maximum = max(event.timestamp_ms for event in events)
     duration = maximum - minimum + 1
+    # 全局 80%/10%/10% 时间切分；所有用户共享同一边界。
     boundaries = TemporalBoundaries(
         train_end_ms=minimum + duration * 8 // 10,
         validation_end_ms=minimum + duration * 9 // 10,
@@ -309,6 +315,7 @@ def main() -> int:
         f"train={len(train_samples)} validation={len(validation_samples)}"
     )
 
+    # variant 只打开对应模块，便于 base/instruction/Q2I/IGR 做同口径消融。
     config = OxygenRECConfig(
         sid_width=registry.width,
         sid_levels=registry.levels,
@@ -392,6 +399,7 @@ def main() -> int:
         for sample_batch in chunks(train_samples, args.batch_size):
             batch = tensor_batch(sample_batch, registry, args, device)
             optimizer.zero_grad(set_to_none=True)
+            # 主训练前向：返回 weighted NTP，以及可选 Q2I 联合损失。
             output = model(**batch)
             expected_loss = output.ntp_loss
             if output.q2i_loss is not None:

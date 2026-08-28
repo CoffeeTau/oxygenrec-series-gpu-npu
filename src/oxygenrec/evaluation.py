@@ -1,4 +1,4 @@
-"""Auditable ranking metrics for generated Semantic-ID candidates."""
+"""对生成的 Semantic-ID 候选计算可审计排序指标。"""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ from .sid import SIDRegistry
 
 @dataclass(frozen=True)
 class RankingMetrics:
+    """HR/Recall/MRR/NDCG 与合法 SID 比例的聚合结果。"""
     sample_count: int
     legal_sid_rate: float
     hit_rate: Mapping[int, float]
@@ -27,11 +28,10 @@ def evaluate_sid_ranking(
     *,
     ks: Sequence[int] = (1, 10),
 ) -> RankingMetrics:
-    """Evaluate ranked SID paths against one next-item target per sample.
+    """用每个样本的唯一下一商品 target 评测 SID 排序。
 
-    A colliding SID is a hit when its explicit registry item set contains the
-    target. For a single relevant next-item target, Recall@K equals HR@K; both
-    names are returned so experiment tables remain protocol-explicit.
+    若 SID 发生碰撞，只要 registry 中该 SID 的显式商品集合包含 target 就算命中。
+    单一相关 target 协议下 Recall@K 等于 HR@K；两者都返回以保持表格口径明确。
     """
 
     if not predictions:
@@ -53,6 +53,7 @@ def evaluate_sid_ranking(
         target = str(raw_target)
         first_hit: int | None = None
         for rank, codes in enumerate(ranking, start=1):
+            # SID 先通过 registry 还原成可能的商品集合，再判断 target 是否在其中。
             items = registry.items_for(codes)
             candidate_count += 1
             if items:

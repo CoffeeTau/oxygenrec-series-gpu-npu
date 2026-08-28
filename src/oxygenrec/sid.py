@@ -1,8 +1,7 @@
-"""Semantic-ID primitives shared by tokenization, decoding, and evaluation.
+"""SID 量化、约束解码和评测共同使用的基础数据结构。
 
-The paper fixes the production representation at three residual-quantization
-levels. It does not disclose how SID collisions are resolved. This module keeps
-all colliding item IDs and makes the ambiguity observable to later stages.
+论文使用三层残差量化表示商品，但没有公开 SID 碰撞的处理细节。本模块不会
+偷偷丢弃碰撞商品，而是保留同一 SID 对应的全部 item，让后续评测显式看到歧义。
 """
 
 from __future__ import annotations
@@ -16,7 +15,7 @@ from typing import Iterable, Iterator, Mapping, Sequence
 
 @dataclass(frozen=True, order=True)
 class SemanticID:
-    """A validated, immutable hierarchical Semantic ID."""
+    """经过层数与取值范围校验、不可修改的层次化 Semantic ID。"""
 
     codes: tuple[int, ...]
 
@@ -39,7 +38,7 @@ class SemanticID:
 
 
 class SIDRegistry:
-    """Versioned item/SID mapping that preserves and reports collisions."""
+    """带版本号的 item↔SID 映射，同时保留并报告碰撞。"""
 
     def __init__(
         self,
@@ -76,24 +75,29 @@ class SIDRegistry:
         return self._item_to_sid
 
     def sid_for(self, item_id: str) -> SemanticID:
+        """查询一个商品的 SID；未知商品由映射本身抛出 KeyError。"""
         return self._item_to_sid[str(item_id)]
 
     def items_for(self, sid: SemanticID | Sequence[int]) -> tuple[str, ...]:
+        """返回某个 SID 对应的全部商品，用于碰撞感知评测。"""
         key = sid if isinstance(sid, SemanticID) else SemanticID(
             sid, levels=self.levels, width=self.width
         )
         return self._sid_to_items.get(key, ())
 
     def collisions(self) -> Mapping[SemanticID, tuple[str, ...]]:
+        """返回至少对应两个商品的 SID。"""
         return MappingProxyType(
             {sid: items for sid, items in self._sid_to_items.items() if len(items) > 1}
         )
 
     def collision_rate(self) -> float:
+        """计算处在碰撞 SID 中的商品占全部已登记商品的比例。"""
         colliding_items = sum(len(items) for items in self.collisions().values())
         return colliding_items / len(self._item_to_sid)
 
     def to_json(self, path: str | Path) -> None:
+        """把 registry 及其量化版本保存为可审计 JSON。"""
         payload = {
             "version": self.version,
             "levels": self.levels,
@@ -109,6 +113,7 @@ class SIDRegistry:
 
     @classmethod
     def from_json(cls, path: str | Path) -> "SIDRegistry":
+        """从 JSON 恢复完全相同的 item↔SID 映射。"""
         payload = json.loads(Path(path).read_text(encoding="utf-8"))
         return cls(
             payload["items"],
@@ -119,7 +124,7 @@ class SIDRegistry:
 
 
 class PrefixTrie:
-    """Prefix index used to mask illegal next SID codes during decoding."""
+    """合法 SID 的前缀树；生成每一层 code 时用于屏蔽非法续写。"""
 
     _END = object()
 
@@ -143,6 +148,7 @@ class PrefixTrie:
         return cls(registry.item_to_sid.values())
 
     def allowed_next(self, prefix: Sequence[int]) -> tuple[int, ...]:
+        """给定已生成前缀，返回下一层允许选择的 code。"""
         node = self._find(prefix)
         if node is None:
             return ()
@@ -163,4 +169,3 @@ class PrefixTrie:
                 return None
             node = child
         return node
-

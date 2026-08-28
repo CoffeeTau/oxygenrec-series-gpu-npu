@@ -1,4 +1,4 @@
-"""Leak-resistant temporal splitting and next-item sample construction."""
+"""防止未来信息泄漏的时间切分与下一商品样本构造。"""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ class Split(str, Enum):
 
 @dataclass(frozen=True)
 class TemporalBoundaries:
-    """Global timestamp boundaries shared by every user and item."""
+    """所有用户和商品共享的全局时间边界，避免逐用户切分带来的口径漂移。"""
 
     train_end_ms: int
     validation_end_ms: int
@@ -31,6 +31,7 @@ class TemporalBoundaries:
             raise ValueError("validation_end_ms must be greater than train_end_ms")
 
     def split_for(self, timestamp_ms: int) -> Split:
+        """根据事件时间返回 train/validation/test。"""
         if timestamp_ms < self.train_end_ms:
             return Split.TRAIN
         if timestamp_ms < self.validation_end_ms:
@@ -40,7 +41,7 @@ class TemporalBoundaries:
 
 @dataclass(frozen=True)
 class NextItemSample:
-    """One autoregressive next-item target with strictly earlier history."""
+    """一个自回归下一商品样本；history 中每个事件都必须严格早于 target。"""
 
     split: Split
     user_id: str
@@ -61,7 +62,7 @@ class NextItemSample:
 def training_item_ids(
     events: Iterable[InteractionEvent], boundaries: TemporalBoundaries
 ) -> frozenset[str]:
-    """Return the item vocabulary visible before the global training cutoff."""
+    """只用训练截止时间之前出现的商品建立词表。"""
 
     return frozenset(
         event.item_id
@@ -85,12 +86,10 @@ def build_next_item_samples(
     max_samples_per_split: Mapping[Split, int] | None = None,
     sample_seed: int = 0,
 ) -> list[NextItemSample]:
-    """Build chronologically ordered samples without future-event leakage.
+    """按时间构造下一商品样本，并阻断未来事件泄漏。
 
-    Histories may cross split boundaries: a validation/test target can use all
-    interactions strictly before its timestamp. The target label itself is never
-    inserted into history. When timestamps tie, none of the tied events can see
-    another tied event, because their causal order is unknown.
+    validation/test 的目标可以使用所有严格早于自身的历史，即历史允许跨越 split
+    边界；target 本身绝不会进入 history。同一毫秒的事件因顺序未知，也互不可见。
     """
 
     if min_history < 1:
@@ -101,6 +100,7 @@ def build_next_item_samples(
     if any(limit < 1 for limit in limits.values()):
         raise ValueError("max_samples_per_split limits must be positive")
 
+    # InteractionEvent 按 timestamp/source_row 排序，保证每次构造结果一致。
     ordered_events = sorted(events)
     train_items = training_item_ids(ordered_events, boundaries)
     targets = frozenset(target_behaviors)
@@ -127,6 +127,7 @@ def build_next_item_samples(
             ):
                 group_end += 1
 
+            # 先基于旧 history 构造这一时间组的所有 target，之后才整体加入 history。
             same_time_events = user_events[cursor:group_end]
             if len(history) >= min_history:
                 selected_history = history[-max_history:] if max_history else history
@@ -150,6 +151,7 @@ def build_next_item_samples(
                         if len(bucket) < limit:
                             bucket.append(sample)
                         else:
+                            # 确定性 reservoir sampling：限制样本量但不偏向文件前部。
                             replacement = generators[sample.split].randrange(
                                 seen_by_split[sample.split]
                             )

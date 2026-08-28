@@ -1,9 +1,8 @@
-"""Auditable public proxies for contextual reasoning instructions.
+"""可审计的 Contextual Reasoning Instruction 公开代理。
 
-The paper's Slow LLM and private instruction store are unavailable.  This
-module deliberately provides a deterministic text-to-feature boundary so that
-human-readable instructions can *actually* enter the reproduced fast model.
-It is an engineering proxy, not a language-model reproduction.
+论文的 Slow LLM 与私有 instruction store 未公开。本模块提供确定性的
+文本→特征边界，让可读 instruction 能实际进入 Fast 模型；它是早期工程代理，
+不是对语言模型本身的复现。当前真实 Qwen 路线见 ``llm_reasoning.py``。
 """
 
 from __future__ import annotations
@@ -23,7 +22,7 @@ _CJK = re.compile(r"[\u3400-\u9fff]")
 
 @dataclass(frozen=True)
 class ContextualInstruction:
-    """One reviewable instruction and the evidence used to construct it."""
+    """一条可人工检查的 instruction，以及构造它所使用的证据和来源。"""
 
     sample_id: str
     text: str
@@ -33,7 +32,7 @@ class ContextualInstruction:
 
 
 def build_history_instruction(behaviors: Sequence[str]) -> tuple[str, tuple[str, ...]]:
-    """Build a leakage-free instruction from strictly prior behavior names."""
+    """仅根据严格早于 target 的行为名称构造无泄漏的确定性代理文本。"""
 
     if not behaviors:
         raise ValueError("behaviors must not be empty")
@@ -55,7 +54,7 @@ def build_history_instruction(behaviors: Sequence[str]) -> tuple[str, tuple[str,
 
 
 def instruction_tokens(text: str) -> tuple[str, ...]:
-    """Return simple language-independent tokens without external models."""
+    """不依赖外部模型，把英文词、中文单字和中文二元组切成简单 token。"""
 
     normalized = " ".join(text.strip().lower().split())
     words = _ASCII_WORD.findall(normalized)
@@ -65,10 +64,10 @@ def instruction_tokens(text: str) -> tuple[str, ...]:
 
 
 def hash_instruction(text: str, dimension: int = 64) -> tuple[float, ...]:
-    """Encode text with signed feature hashing and L2 normalization.
+    """使用带符号 feature hashing 编码文本，并做 L2 归一化。
 
-    This function is deterministic across Python processes; unlike ``hash()``,
-    BLAKE2 is unaffected by hash randomization.
+    BLAKE2 不受 Python ``hash()`` 随机化影响，因此跨进程结果一致。
+    该函数只用于早期公开代理与消融，不代表真实 LLM 语义表示。
     """
 
     if dimension < 1:
@@ -87,11 +86,12 @@ def hash_instruction(text: str, dimension: int = 64) -> tuple[float, ...]:
 def encode_instructions(
     instructions: Sequence[str], dimension: int = 64,
 ) -> list[tuple[float, ...]]:
+    """批量调用 hash_instruction。"""
     return [hash_instruction(text, dimension) for text in instructions]
 
 
 class InstructionStore:
-    """Small JSONL store that keeps proxy text and provenance reviewable."""
+    """保存代理文本、证据和来源的小型 JSONL 仓库。"""
 
     @staticmethod
     def save(path: str | Path, records: Iterable[ContextualInstruction]) -> None:

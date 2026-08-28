@@ -1,8 +1,7 @@
-"""Dense OxygenREC backbone with instruction conditioning, Q2I and IGR.
+"""包含 instruction、Q2I 和 IGR 的小型 Dense OxygenREC 主干。
 
-The model consumes already-tokenized item Semantic IDs. Dataset code remains
-responsible for mapping item IDs through a versioned ``SIDRegistry`` so model
-checkpoints never silently select a different codebook.
+模型只消费已 token 化的商品 Semantic ID。数据层必须使用带版本的
+``SIDRegistry`` 完成 item→SID 映射，避免 checkpoint 静默换用不同 codebook。
 """
 
 from __future__ import annotations
@@ -20,7 +19,7 @@ from .retrieval_planning import ExecutableRetrievalPlan, execute_retrieval_plan
 
 @dataclass(frozen=True)
 class OxygenRECConfig:
-    """Explicit engineering choices for the first small dense model."""
+    """小型 Dense 复现模型的显式配置；默认值不是论文私有生产参数。"""
 
     sid_width: int
     sid_levels: int = 3
@@ -78,7 +77,7 @@ class OxygenRECConfig:
 
 @dataclass(frozen=True)
 class OxygenRECOutput:
-    """Per-level logits and optional weighted next-token loss."""
+    """三层 SID logits、NTP/Q2I loss 以及可选 IGR 诊断结果。"""
 
     logits: tuple[Tensor, ...]
     loss: Tensor | None = None
@@ -92,18 +91,20 @@ class OxygenRECOutput:
 
 @dataclass(frozen=True)
 class BeamSearchOutput:
-    """Ranked legal SID paths and cumulative log-probability scores."""
+    """按累计对数概率排序的合法 SID 路径。"""
 
     semantic_ids: Tensor  # [batch, beam, levels]
     scores: Tensor  # [batch, beam]
 
 
 class OxygenRECModel(nn.Module):
-    """Small Transformer encoder-decoder with one prediction head per SID level."""
+    """小型 Transformer Encoder-Decoder；每一层 SID 有独立预测头。"""
 
     def __init__(self, config: OxygenRECConfig) -> None:
+        """创建 SID embedding、instruction/Q2I/IGR 适配器和 Encoder-Decoder。"""
         super().__init__()
         self.config = config
+        # 三层 SID 各有独立 embedding；一个商品向量由三层 embedding 相加得到。
         self.sid_embeddings = nn.ModuleList(
             nn.Embedding(config.sid_width, config.hidden_size)
             for _ in range(config.sid_levels)
@@ -129,6 +130,7 @@ class OxygenRECModel(nn.Module):
         self.history_context_query = nn.Linear(config.hidden_size, config.hidden_size)
         self.history_context_key = nn.Linear(config.hidden_size, config.hidden_size)
         self.history_context_value = nn.Linear(config.hidden_size, config.hidden_size)
+        # [scenario; reasoning] -> Q2I/IGR 共用的归一化 query 向量。
         self.query_adapter = nn.Sequential(
             nn.Linear(config.hidden_size * 2, config.hidden_size), nn.GELU(),
             nn.Linear(config.hidden_size, config.q2i_dimension),
@@ -164,6 +166,7 @@ class OxygenRECModel(nn.Module):
         self.decoder = nn.TransformerDecoder(
             decoder_layer, config.decoder_layers, norm=nn.LayerNorm(config.hidden_size)
         )
+        # Decoder 的三个位置分别预测 SID level 0/1/2。
         self.prediction_heads = nn.ModuleList(
             nn.Linear(config.hidden_size, config.sid_width, bias=False)
             for _ in range(config.sid_levels)
@@ -172,6 +175,7 @@ class OxygenRECModel(nn.Module):
         self._reset_parameters()
 
     def _reset_parameters(self) -> None:
+        """初始化代码中额外定义的位置和 BOS 参数。"""
         nn.init.normal_(self.bos_embedding, mean=0.0, std=0.02)
         nn.init.normal_(self.history_positions.weight, mean=0.0, std=0.02)
         nn.init.normal_(self.decoder_positions.weight, mean=0.0, std=0.02)
@@ -194,18 +198,18 @@ class OxygenRECModel(nn.Module):
         retrieval_plans: Sequence[ExecutableRetrievalPlan] | None = None,
         level_weights: Sequence[float] | Tensor | None = None,
     ) -> OxygenRECOutput:
-        """Predict all SID levels with teacher forcing.
+        """执行主前向：构造 query、可选 IGR、Encoder、Decoder 和联合损失。
 
-        ``history_sids`` has shape ``[batch, history, levels]`` and
-        ``history_padding_mask`` has shape ``[batch, history]`` where ``True``
-        denotes padding. Without targets, prefixes are selected autoregressively
-        from the preceding level head.
+        ``history_sids``=[B,H,L]，``history_padding_mask``=[B,H]，其中 True
+        表示 padding。训练时传入 ``target_sids``=[B,L] 做 teacher forcing；
+        不传 target 时，上一层 argmax 会作为下一层前缀。
         """
 
         self._validate_inputs(history_sids, history_padding_mask, target_sids)
         batch_size = history_sids.shape[0]
         instruction_ids = self._default_ids(instruction_ids, batch_size, history_sids.device)
         scenario_ids = self._default_ids(scenario_ids, batch_size, history_sids.device)
+        # 1) 从短历史得到可选上下文摘要，再与 scenario/reasoning 合成 query。
         history_context = self._history_context(
             history_sids, history_padding_mask, scenario_ids
         )
@@ -213,6 +217,7 @@ class OxygenRECModel(nn.Module):
             scenario_ids, instruction_ids, instruction_features, trigger_sids,
             history_context,
         )
+        # 2) IGR 从长历史选 K 个 SID，拼到短历史后形成 Encoder 输入。
         encoder_sids, encoder_mask, igr_indices, igr_scores = self._augment_history(
             history_sids, history_padding_mask, long_history_sids,
             long_history_padding_mask, query,
@@ -221,12 +226,14 @@ class OxygenRECModel(nn.Module):
         )
         if long_history_sids is not None and history_behavior_ids is not None:
             raise ValueError("behavior-conditioned IGR requires long-history behavior IDs")
+        # 3) Encoder: [B,H(+K),L] -> memory [B,H(+K),D]。
         memory = self._encode(encoder_sids, encoder_mask, history_behavior_ids)
         if target_sids is None:
             logits = self._autoregressive_logits(
                 memory, encoder_mask, scenario_prompt, reasoning_prompt
             )
             return OxygenRECOutput(logits=logits, igr_indices=igr_indices, igr_scores=igr_scores)
+        # 4) teacher forcing：用真实 SID 前两层作为 Decoder 的已知前缀。
         prefix = target_sids[:, :-1]
         hidden = self._decode(memory, encoder_mask, scenario_prompt, reasoning_prompt, prefix)
         logits = tuple(
@@ -238,6 +245,7 @@ class OxygenRECModel(nn.Module):
         )
         loss = ntp_loss
         q2i_loss = alignment_loss = None
+        # 5) Q2I 让 query 靠近目标商品向量；总损失=NTP+权重*Q2I。
         if self.config.q2i_weight > 0:
             targets = F.normalize(self.item_adapter(self._item_embedding(target_sids)), dim=-1)
             q2i_loss, alignment_loss = self.q2i_alignment_loss(query, targets)
@@ -255,6 +263,7 @@ class OxygenRECModel(nn.Module):
         scenario_prompt: Tensor,
         reasoning_prompt: Tensor,
     ) -> tuple[Tensor, ...]:
+        """无 target 时按 level 0→1→2 贪心产生三组 logits。"""
         prefix = torch.empty(
             (memory.shape[0], 0), dtype=torch.long, device=memory.device
         )
@@ -272,9 +281,11 @@ class OxygenRECModel(nn.Module):
         self, history_sids: Tensor, padding_mask: Tensor,
         behavior_ids: Tensor | None = None,
     ) -> Tensor:
+        """把历史 SID/位置/可选行为 embedding 相加后送入 Encoder。"""
         _, history_length, _ = history_sids.shape
         positions = torch.arange(history_length, device=history_sids.device)
         hidden = self.history_positions(positions).unsqueeze(0)
+        # 每个历史商品的三层 SID embedding 求和，而不是沿层维拼接。
         hidden = hidden + sum(
             embedding(history_sids[:, :, level])
             for level, embedding in enumerate(self.sid_embeddings)
@@ -297,6 +308,7 @@ class OxygenRECModel(nn.Module):
         return self.encoder(self.dropout(hidden), src_key_padding_mask=padding_mask)
 
     def _item_embedding(self, sids: Tensor) -> Tensor:
+        """将任意前导形状的 SID [...,L] 转成商品向量 [...,D]。"""
         return sum(
             embedding(sids[..., level])
             for level, embedding in enumerate(self.sid_embeddings)
@@ -304,6 +316,7 @@ class OxygenRECModel(nn.Module):
 
     @staticmethod
     def _default_ids(ids: Tensor | None, batch_size: int, device: torch.device) -> Tensor:
+        """缺省 instruction/scenario 使用 ID 0，并校验显式输入形状。"""
         if ids is None:
             return torch.zeros(batch_size, dtype=torch.long, device=device)
         if ids.shape != (batch_size,) or ids.dtype != torch.long:
@@ -315,6 +328,7 @@ class OxygenRECModel(nn.Module):
         instruction_features: Tensor | None, trigger_sids: Tensor | None,
         history_context: Tensor | None = None,
     ) -> tuple[Tensor, Tensor, Tensor]:
+        """融合 scenario、reasoning、trigger 和历史摘要，得到 Q2I/IGR query。"""
         batch_size = scenario_ids.shape[0]
         scenario = self.scenario_embeddings(scenario_ids)
         if trigger_sids is not None:
@@ -331,12 +345,14 @@ class OxygenRECModel(nn.Module):
             reasoning = self.instruction_feature_adapter(instruction_features)
         if history_context is not None:
             reasoning = reasoning + history_context
+        # query=[B,Q] 会同时用于长历史 IGR 相似度和目标商品 Q2I 对齐。
         query = F.normalize(self.query_adapter(torch.cat((scenario, reasoning), dim=-1)), dim=-1)
         return scenario, reasoning, query
 
     def _history_context(
         self, history_sids: Tensor, padding_mask: Tensor, scenario_ids: Tensor
     ) -> Tensor | None:
+        """对短历史做 masked mean 或 scenario-conditioned attention 摘要。"""
         if not self.config.use_history_context_instruction:
             return None
         items = self._item_embedding(history_sids)
@@ -362,6 +378,11 @@ class OxygenRECModel(nn.Module):
         long_history_behavior_ids: Tensor | None = None,
         retrieval_plans: Sequence[ExecutableRetrievalPlan] | None = None,
     ) -> tuple[Tensor, Tensor, Tensor | None, Tensor | None]:
+        """用 query 检索长历史并把 top-k SID 拼接到短历史。
+
+        short_sids=[B,S,L]，long_sids=[B,H,L]，query=[B,Q]；返回的历史长度
+        为 S+K。没有长历史时原样返回短历史。
+        """
         if long_sids is None:
             if long_mask is not None:
                 raise ValueError("long_history_padding_mask requires long_history_sids")
@@ -374,11 +395,11 @@ class OxygenRECModel(nn.Module):
             raise ValueError("long_history_padding_mask must be boolean [batch, long_history]")
         if ((~long_mask).sum(dim=1) < self.config.igr_top_k).any():
             raise ValueError("each long history must contain at least igr_top_k valid items")
-        # The paper keeps the long-history branch frozen; retrieval therefore
-        # must not update either SID embeddings or the shared item adapter.
+        # 论文中的长历史检索分支保持冻结：detach 阻止 IGR 反向更新 SID/item adapter。
         long_vectors = F.normalize(
             self.item_adapter(self._item_embedding(long_sids)).detach(), dim=-1
         )
+        # 归一化 query 与 item 做点积即 cosine，padding 位置设为 -inf。
         scores = torch.einsum("bd,bhd->bh", query, long_vectors).masked_fill(long_mask, float("-inf"))
         if retrieval_plans is None:
             top_scores, top_indices = scores.topk(self.config.igr_top_k, dim=1)
@@ -391,6 +412,7 @@ class OxygenRECModel(nn.Module):
                 scores, long_sids, long_history_behavior_ids, long_mask,
                 retrieval_plans, top_k=self.config.igr_top_k,
             )
+        # 按 top-k 索引取回真实三层 SID，并追加到短历史尾部。
         gathered = long_sids.gather(1, top_indices.unsqueeze(-1).expand(-1, -1, self.config.sid_levels))
         combined = torch.cat((short_sids, gathered), dim=1)
         combined_mask = torch.cat((short_mask, torch.zeros_like(top_indices, dtype=torch.bool)), dim=1)
@@ -404,7 +426,9 @@ class OxygenRECModel(nn.Module):
         reasoning_prompt: Tensor,
         prefix_codes: Tensor | None,
     ) -> Tensor:
+        """以两个 prompt token、BOS 和 SID 前缀为输入执行 causal Decoder。"""
         batch_size = memory.shape[0]
+        # Decoder 序列布局：[scenario, reasoning, BOS, sid_level_0, sid_level_1]。
         tokens = [scenario_prompt, reasoning_prompt]
         tokens.append(self.bos_embedding.unsqueeze(0).expand(batch_size, -1))
         if prefix_codes is not None:
@@ -429,10 +453,11 @@ class OxygenRECModel(nn.Module):
         )
 
     def q2i_alignment_loss(self, queries: Tensor, targets: Tensor) -> tuple[Tensor, Tensor]:
-        """Cosine alignment with the paper's variance and decorrelation terms."""
+        """Q2I：余弦对齐，并加入方差保持与 batch 内去相关正则。"""
         if queries.shape != targets.shape or queries.ndim != 2:
             raise ValueError("queries and targets must share shape [batch, dimension]")
         batch_size = queries.shape[0]
+        # 两侧都已 L2 normalize，点积就是 cosine；取负号后最小化即拉近。
         alignment = -(queries * targets).sum(dim=-1).mean()
         if batch_size < 2:
             return alignment, alignment
@@ -459,7 +484,7 @@ class OxygenRECModel(nn.Module):
         *,
         sample_weights: Tensor | None = None,
     ) -> tuple[Tensor, tuple[Tensor, ...]]:
-        """Return a weight-normalized cross-entropy over SID levels."""
+        """计算三层 SID 的加权、归一化交叉熵（weighted NTP）。"""
 
         if sample_weights is not None:
             if sample_weights.shape != (target_sids.shape[0],):
@@ -502,7 +527,7 @@ class OxygenRECModel(nn.Module):
         long_history_sids: Tensor | None = None,
         long_history_padding_mask: Tensor | None = None,
     ) -> Tensor:
-        """Teacher-force fixed rollout candidates and return [B,G,L] log-probs."""
+        """对固定 rollout 候选做 teacher forcing，返回每层 log-prob [B,G,L]。"""
         if candidate_sids.ndim != 3:
             raise ValueError("candidate_sids must have shape [batch, group, levels]")
         batch, group, levels = candidate_sids.shape
@@ -561,7 +586,7 @@ class OxygenRECModel(nn.Module):
         long_history_sids: Tensor | None = None,
         long_history_padding_mask: Tensor | None = None,
     ) -> Tensor:
-        """Greedily generate legal three-level SIDs using ``PrefixTrie`` masks."""
+        """用 PrefixTrie 屏蔽非法 code，贪心生成合法三层 SID。"""
 
         self._validate_inputs(history_sids, history_padding_mask, None)
         batch_size = history_sids.shape[0]
@@ -592,6 +617,7 @@ class OxygenRECModel(nn.Module):
             selected = []
             for row in range(batch_size):
                 prefix = tuple(int(code) for code in generated[row].tolist())
+                # 只在 registry 中存在的合法前缀续写集合内取 argmax。
                 allowed = trie.allowed_next(prefix)
                 if not allowed:
                     raise ValueError(f"trie has no legal continuation for prefix {prefix}")
@@ -619,7 +645,7 @@ class OxygenRECModel(nn.Module):
         long_history_sids: Tensor | None = None,
         long_history_padding_mask: Tensor | None = None,
     ) -> BeamSearchOutput:
-        """Reference constrained beam search with deterministic tie breaking."""
+        """便于审计的约束 beam search；同分时按 SID 字典序稳定打破平局。"""
 
         if beam_width < 1:
             raise ValueError("beam_width must be positive")
@@ -696,6 +722,7 @@ class OxygenRECModel(nn.Module):
         history_padding_mask: Tensor,
         target_sids: Tensor | None,
     ) -> None:
+        """统一校验主干输入的维度、dtype、padding 和 SID 取值范围。"""
         if history_sids.ndim != 3:
             raise ValueError("history_sids must have shape [batch, history, levels]")
         batch_size, history_length, levels = history_sids.shape

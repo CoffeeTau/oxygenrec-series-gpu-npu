@@ -1,4 +1,4 @@
-"""Convert temporal samples to padded Semantic-ID model inputs."""
+"""把时间样本转换为补齐后的 Semantic-ID 模型输入。"""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ from .temporal import NextItemSample
 
 @dataclass(frozen=True)
 class SIDModelBatch:
+    """普通短历史批次；主要张量逻辑形状为 history=[B,H,L]、target=[B,L]。"""
     history_sids: tuple[tuple[tuple[int, ...], ...], ...]
     history_padding_mask: tuple[tuple[bool, ...], ...]
     history_behavior_ids: tuple[tuple[int, ...], ...]
@@ -19,7 +20,7 @@ class SIDModelBatch:
 
 @dataclass(frozen=True)
 class LongShortSIDModelBatch:
-    """Recent encoder history plus an older pool for instruction retrieval."""
+    """IGR 批次：近期短历史进入主干，较早长历史作为检索候选池。"""
 
     short_history_sids: tuple[tuple[tuple[int, ...], ...], ...]
     short_history_padding_mask: tuple[tuple[bool, ...], ...]
@@ -37,10 +38,10 @@ def build_sid_model_batch(
     *,
     max_history_items: int,
 ) -> SIDModelBatch:
-    """Map item IDs through one registry and left-pad recent known history.
+    """通过固定 registry 把 item ID 映射为 SID，并在左侧补齐近期历史。
 
-    Unknown history items are excluded explicitly. Targets must be present in
-    the train-fitted registry; cold-start targets belong to a separate protocol.
+    registry 外的历史商品会被明确过滤；target 必须存在于训练期 registry。
+    冷启动 target 应进入独立评测协议，不能在这里悄悄编码。
     """
 
     if not samples:
@@ -57,6 +58,7 @@ def build_sid_model_batch(
             raise ValueError(
                 f"target item {sample.target.item_id!r} is absent from SID registry"
             )
+        # 只保留可编码商品，并截取最近 H 个事件。
         known_events = [
             event
             for event in sample.history
@@ -77,6 +79,7 @@ def build_sid_model_batch(
     pad_sid = (0,) * registry.levels
     for history, behaviors in zip(histories, history_behaviors, strict=True):
         padding = max_history_items - len(history)
+        # 左补齐保证真实的最近事件仍位于序列尾部。
         padded_history.append((pad_sid,) * padding + history)
         padding_masks.append((True,) * padding + (False,) * len(history))
         padded_behaviors.append((0,) * padding + behaviors)
@@ -96,12 +99,11 @@ def build_long_short_sid_model_batch(
     long_history_items: int,
     minimum_long_history_items: int = 1,
 ) -> LongShortSIDModelBatch:
-    """Split known history into disjoint recent and older chronological windows.
+    """把已知历史切成互不重叠的近期窗口和较早窗口。
 
-    The recent tail is always assigned to the backbone. The immediately
-    preceding window becomes the IGR candidate pool, so an interaction can
-    never occur in both branches. Samples without enough known older items are
-    rejected explicitly instead of silently retrieving padding.
+    最近 ``short_history_items`` 条给 Encoder 主干；其前面的
+    ``long_history_items`` 条作为 IGR 候选池。同一事件不会同时出现在两条分支；
+    长历史有效候选不足时直接拒绝样本，避免 IGR 选中 padding。
     """
 
     if not samples:
@@ -133,6 +135,7 @@ def build_long_short_sid_model_batch(
         ]
         known = [registry.sid_for(event.item_id).codes for event in known_events]
         known_behavior = [scenario_by_behavior[event.behavior.value] for event in known_events]
+        # 时间顺序不变：尾部是短历史，紧邻其前的部分是长历史候选。
         short = known[-short_history_items:]
         long = known[: -len(short)][-long_history_items:] if short else []
         short_behavior = known_behavior[-short_history_items:]

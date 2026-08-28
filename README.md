@@ -18,6 +18,10 @@ their GPU control flow.
 
 ## Current milestone
 
+中文代码审阅建议先看 [代码阅读与数据流指南](代码阅读与数据流指南.md)。该指南按
+真实调用链说明数据切分、SID、Encoder-Decoder、Contextual Reasoning、Q2I、IGR
+以及当前尚未完成的边界。
+
 Phase 1 starts with the smallest auditable loop:
 
 ```text
@@ -38,16 +42,19 @@ Implemented now:
 - three level-specific prediction heads and weighted next-token loss;
 - greedy PrefixTrie-constrained Semantic-ID decoding;
 - deterministic reference beam search and HR/Recall/MRR/NDCG evaluation;
+- contextual instruction fusion and Q2I semantic alignment;
+- long-history IGR and bounded Qwen Retrieval Plan controls;
+- local Qwen3-4B structured reasoning generation on GPU;
+- public-proxy SA-GCPO objectives and rollout validation;
 - dependency-free unit tests for these invariants.
 
-Planned next:
+Review/future work:
 
-1. approve and acquire a public benchmark dataset;
-2. item embedding import and residual K-means;
-3. toy-batch overfit and checkpoint round-trip on a PyTorch environment;
-4. connect beam search and ranking evaluation to a real validation split;
-5. instruction fusion, Q2I, and IGR;
-6. multi-scenario post-training and, only after dense validation, MoE.
+1. review the completed GPU-side v1 method chain and its public-data limits;
+2. propagate executable Qwen plans from diagnostic ``forward`` into final
+   ``generate``/``beam_search`` before claiming recommendation-output impact;
+3. design real-Qwen SFT/RL only after the code review is complete;
+4. keep NPU migration and MoE deferred until the GPU learning objectives close.
 
 See [the reuse survey](docs/reference_reuse.md) and
 [explicit implementation assumptions](configs/assumptions.yaml). The current

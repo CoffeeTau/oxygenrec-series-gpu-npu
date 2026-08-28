@@ -1,4 +1,4 @@
-"""Structured Slow-LLM reasoning generation with explicit audit boundaries."""
+"""生成结构化 Slow-LLM reasoning，并显式限制可用证据与输出格式。"""
 
 from __future__ import annotations
 
@@ -15,11 +15,13 @@ REQUIRED_REASONING_KEYS = (
 
 @dataclass(frozen=True)
 class GeneratedReasoning:
+    """同时保留模型原始文本和通过严格 schema 校验后的字典。"""
     raw_text: str
     parsed: dict[str, object]
 
 
 def reasoning_system_prompt() -> str:
+    """返回约束 Qwen 输出可审计 Retrieval Plan 的 system prompt。"""
     return (
         "你是电商检索规划器。只能使用用户提供的历史证据，不得猜测下一次真实行为、"
         "目标商品或未提供的属性。只输出一个JSON对象，不输出Markdown。JSON必须包含"
@@ -33,7 +35,10 @@ def reasoning_system_prompt() -> str:
 
 
 def parse_reasoning_json(text: str) -> dict[str, object]:
-    """Extract one JSON object while tolerating accidental surrounding text."""
+    """提取第一个完整 JSON 对象，并严格校验 Reasoning/Plan schema。
+
+    允许完整 JSON 前后出现少量多余文本，但不会猜测或修补残缺 JSON。
+    """
 
     start = text.find("{")
     if start < 0:
@@ -81,7 +86,7 @@ def parse_reasoning_json(text: str) -> dict[str, object]:
 
 
 class FrozenLLMReasoningGenerator:
-    """Deterministic local generation from a frozen causal language model."""
+    """使用冻结的本地因果语言模型做确定性结构化生成。"""
 
     def __init__(
         self, model_path: str | Path, *, device: str = "cuda",
@@ -113,8 +118,10 @@ class FrozenLLMReasoningGenerator:
     def generate(
         self, evidence_prompts: Sequence[str], *, max_new_tokens: int = 192,
     ) -> list[GeneratedReasoning]:
+        """批量生成 Reasoning；任一 case 不合法时携带索引与截断信息报错。"""
         import torch
 
+        # 使用模型自己的 chat template，避免手写特殊 token 与官方格式不一致。
         rendered = [
             self.tokenizer.apply_chat_template(
                 [
@@ -130,6 +137,7 @@ class FrozenLLMReasoningGenerator:
             max_length=self.max_input_length, return_tensors="pt",
         )
         tokens = {name: value.to(self.device) for name, value in tokens.items()}
+        # greedy 解码用于可复现验收；采样参数必须清空，避免产生“被忽略”警告。
         with torch.inference_mode():
             generation_config = self.model.generation_config
             generation_config.do_sample = False
@@ -140,6 +148,7 @@ class FrozenLLMReasoningGenerator:
                 **tokens, generation_config=generation_config,
                 max_new_tokens=max_new_tokens, use_cache=True,
             )
+        # decoder-only generate 返回“输入+新 token”，所以解码时先切掉输入部分。
         prompt_length = tokens["input_ids"].shape[1]
         results = []
         for index, row in enumerate(generated):
