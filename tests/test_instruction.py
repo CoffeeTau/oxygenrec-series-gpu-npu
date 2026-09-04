@@ -88,6 +88,41 @@ class InstructionQ2IIGRTest(unittest.TestCase):
         self.assertEqual(tuple(output.igr_indices.shape), (2, 2))
         self.assertTrue((output.igr_indices < 3).all())
 
+    def test_executable_plan_reaches_generate_and_beam_search(self):
+        from unittest.mock import patch
+
+        import oxygenrec.model as model_module
+        from oxygenrec.retrieval_planning import compile_retrieval_plan
+        from oxygenrec.sid import PrefixTrie
+
+        plans = [compile_retrieval_plan(
+            {"priority_behaviors": ["transaction"], "recency": "balanced",
+             "prefer_repeated_items": False, "diversity": "low"},
+            {"view": 2, "transaction": 1},
+        )] * 2
+        long_behaviors = torch.tensor([[0, 2, 0, 0]] * 2)
+        trie = PrefixTrie([(1, 2, 3), (7, 8, 9), (8, 9, 10)])
+        shared = dict(
+            instruction_features=self.features,
+            long_history_sids=self.long,
+            long_history_padding_mask=self.long_mask,
+            long_history_behavior_ids=long_behaviors,
+            retrieval_plans=plans,
+        )
+        with patch.object(
+            model_module, "execute_retrieval_plan",
+            wraps=model_module.execute_retrieval_plan,
+        ) as execute:
+            generated = self.model.generate(
+                self.short, self.short_mask, trie, **shared,
+            )
+            beams = self.model.beam_search(
+                self.short, self.short_mask, trie, beam_width=2, **shared,
+            )
+        self.assertEqual(execute.call_count, 2)
+        self.assertEqual(tuple(generated.shape), (2, 3))
+        self.assertEqual(tuple(beams.semantic_ids.shape), (2, 2, 3))
+
 
 if __name__ == "__main__":
     unittest.main()

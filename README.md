@@ -50,10 +50,10 @@ Implemented now:
 
 Review/future work:
 
-1. review the completed GPU-side v1 method chain and its public-data limits;
-2. propagate executable Qwen plans from diagnostic ``forward`` into final
-   ``generate``/``beam_search`` before claiming recommendation-output impact;
-3. design real-Qwen SFT/RL only after the code review is complete;
+1. validate on CUDA that executable Qwen plans reach ``forward``, ``generate``,
+   ``beam_search``, and rollout candidate log-probabilities;
+2. design the real-Qwen SFT data protocol and training interface;
+3. review the completed GPU-side v1 method chain and its public-data limits;
 4. keep NPU migration and MoE deferred until the GPU learning objectives close.
 
 See [the reuse survey](docs/reference_reuse.md) and

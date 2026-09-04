@@ -107,7 +107,7 @@ class OxygenRECModel(nn.Module):
         # 三层 SID 各有独立 embedding；一个商品向量由三层 embedding 相加得到。
         self.sid_embeddings = nn.ModuleList(
             nn.Embedding(config.sid_width, config.hidden_size)
-            for _ in range(config.sid_levels)
+            for _ in range(config.sid_levels)  # _表示循环变量的具体值不会被使用，只关心循环次数
         )
         self.history_positions = nn.Embedding(
             config.max_history_items + config.igr_top_k, config.hidden_size
@@ -200,9 +200,12 @@ class OxygenRECModel(nn.Module):
     ) -> OxygenRECOutput:
         """执行主前向：构造 query、可选 IGR、Encoder、Decoder 和联合损失。
 
-        ``history_sids``=[B,H,L]，``history_padding_mask``=[B,H]，其中 True
+        ``history_sids``=[B,T,L]，``history_padding_mask``=[B,T]，其中 True
         表示 padding。训练时传入 ``target_sids``=[B,L] 做 teacher forcing；
         不传 target 时，上一层 argmax 会作为下一层前缀。
+
+        符号约定：B 为 batch size，T 为序列长度，H 为隐藏维度，
+        V 为词表大小，L 为 SID 层数。
         """
 
         self._validate_inputs(history_sids, history_padding_mask, target_sids)
@@ -226,7 +229,7 @@ class OxygenRECModel(nn.Module):
         )
         if long_history_sids is not None and history_behavior_ids is not None:
             raise ValueError("behavior-conditioned IGR requires long-history behavior IDs")
-        # 3) Encoder: [B,H(+K),L] -> memory [B,H(+K),D]。
+        # 3) Encoder: [B,T(+K),L] -> memory [B,T(+K),H]。
         memory = self._encode(encoder_sids, encoder_mask, history_behavior_ids)
         if target_sids is None:
             logits = self._autoregressive_logits(
@@ -308,7 +311,7 @@ class OxygenRECModel(nn.Module):
         return self.encoder(self.dropout(hidden), src_key_padding_mask=padding_mask)
 
     def _item_embedding(self, sids: Tensor) -> Tensor:
-        """将任意前导形状的 SID [...,L] 转成商品向量 [...,D]。"""
+        """将任意前导形状的 SID [...,L] 转成商品向量 [...,H]。"""
         return sum(
             embedding(sids[..., level])
             for level, embedding in enumerate(self.sid_embeddings)
@@ -380,8 +383,8 @@ class OxygenRECModel(nn.Module):
     ) -> tuple[Tensor, Tensor, Tensor | None, Tensor | None]:
         """用 query 检索长历史并把 top-k SID 拼接到短历史。
 
-        short_sids=[B,S,L]，long_sids=[B,H,L]，query=[B,Q]；返回的历史长度
-        为 S+K。没有长历史时原样返回短历史。
+        short_sids=[B,T_short,L]，long_sids=[B,T_long,L]，query=[B,Q]；
+        返回的历史长度为 T_short+K。没有长历史时原样返回短历史。
         """
         if long_sids is None:
             if long_mask is not None:
@@ -526,6 +529,8 @@ class OxygenRECModel(nn.Module):
         trigger_sids: Tensor | None = None,
         long_history_sids: Tensor | None = None,
         long_history_padding_mask: Tensor | None = None,
+        long_history_behavior_ids: Tensor | None = None,
+        retrieval_plans: Sequence[ExecutableRetrievalPlan] | None = None,
     ) -> Tensor:
         """对固定 rollout 候选做 teacher forcing，返回每层 log-prob [B,G,L]。"""
         if candidate_sids.ndim != 3:
@@ -540,6 +545,11 @@ class OxygenRECModel(nn.Module):
             batch * group, history_padding_mask.shape[1]
         )
         targets = candidate_sids.reshape(batch * group, levels)
+        expanded_plans = None
+        if retrieval_plans is not None:
+            if len(retrieval_plans) != batch:
+                raise ValueError("one executable plan is required per batch row")
+            expanded_plans = [plan for plan in retrieval_plans for _ in range(group)]
         def expand_vector(value: Tensor | None) -> Tensor | None:
             if value is None:
                 return None
@@ -561,6 +571,8 @@ class OxygenRECModel(nn.Module):
             trigger_sids=expand_features(trigger_sids),
             long_history_sids=expand_features(long_history_sids),
             long_history_padding_mask=expand_features(long_history_padding_mask),
+            long_history_behavior_ids=expand_features(long_history_behavior_ids),
+            retrieval_plans=expanded_plans,
         )
         selected = []
         for level, logits in enumerate(output.logits):
@@ -571,7 +583,7 @@ class OxygenRECModel(nn.Module):
             )
         return torch.stack(selected, dim=-1).reshape(batch, group, levels)
 
-    @torch.no_grad()
+    @torch.no_grad() # generate只负责推理生成SID，不进行参数更新，不需要计算图，所以使用这个装饰器来关闭Pytorch的梯度记录
     def generate(
         self,
         history_sids: Tensor,
@@ -585,6 +597,8 @@ class OxygenRECModel(nn.Module):
         trigger_sids: Tensor | None = None,
         long_history_sids: Tensor | None = None,
         long_history_padding_mask: Tensor | None = None,
+        long_history_behavior_ids: Tensor | None = None,
+        retrieval_plans: Sequence[ExecutableRetrievalPlan] | None = None,
     ) -> Tensor:
         """用 PrefixTrie 屏蔽非法 code，贪心生成合法三层 SID。"""
 
@@ -601,7 +615,9 @@ class OxygenRECModel(nn.Module):
         )
         encoder_sids, encoder_mask, _, _ = self._augment_history(
             history_sids, history_padding_mask, long_history_sids,
-            long_history_padding_mask, query
+            long_history_padding_mask, query,
+            long_history_behavior_ids=long_history_behavior_ids,
+            retrieval_plans=retrieval_plans,
         )
         if long_history_sids is not None and history_behavior_ids is not None:
             raise ValueError("behavior-conditioned IGR requires long-history behavior IDs")
@@ -644,6 +660,8 @@ class OxygenRECModel(nn.Module):
         trigger_sids: Tensor | None = None,
         long_history_sids: Tensor | None = None,
         long_history_padding_mask: Tensor | None = None,
+        long_history_behavior_ids: Tensor | None = None,
+        retrieval_plans: Sequence[ExecutableRetrievalPlan] | None = None,
     ) -> BeamSearchOutput:
         """便于审计的约束 beam search；同分时按 SID 字典序稳定打破平局。"""
 
@@ -662,7 +680,9 @@ class OxygenRECModel(nn.Module):
         )
         encoder_sids, encoder_mask, _, _ = self._augment_history(
             history_sids, history_padding_mask, long_history_sids,
-            long_history_padding_mask, query
+            long_history_padding_mask, query,
+            long_history_behavior_ids=long_history_behavior_ids,
+            retrieval_plans=retrieval_plans,
         )
         if long_history_sids is not None and history_behavior_ids is not None:
             raise ValueError("behavior-conditioned IGR requires long-history behavior IDs")

@@ -5,11 +5,4 @@ set -euo pipefail
 project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$project_dir"
 
-python scripts/evaluate_qwen_plan_retailrocket.py \
-    --events data/raw/retailrocket/events.csv \
-    --checkpoint checkpoints/retailrocket_attention_context_instruction/igr_q2i/epoch-2.pt \
-    --sid-registry checkpoints/retailrocket_attention_context_instruction/igr_q2i/sid_registry.json \
-    --reasoning-input outputs/review/qwen_plan_retailrocket.jsonl \
-    --cases 8 \
-    --device cuda \
-    --output outputs/review/qwen_plan_retailrocket_equal_priority.jsonl
+python scripts/validate_plan_generation_path.py --device cuda

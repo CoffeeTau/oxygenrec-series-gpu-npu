@@ -61,7 +61,7 @@ def execute_retrieval_plan(
 ):
     """在语义分数上施加有界计划偏置，再做考虑多样性的 top-k。
 
-    输入形状：semantic_scores/behavior/mask=[B,H]，candidate_sids=[B,H,L]。
+    输入形状：semantic_scores/behavior/mask=[B,T]，candidate_sids=[B,T,L]。
     语义相似度仍是主分数；Plan 只增加行为优先、时效、重复商品和重复 SID
     抑制等固定小偏置。本函数故意不接收生成的自然语言字段。
     """
@@ -69,7 +69,7 @@ def execute_retrieval_plan(
     import torch
 
     if semantic_scores.ndim != 2 or candidate_sids.ndim != 3:
-        raise ValueError("scores and candidate_sids must be [B,H] and [B,H,L]")
+        raise ValueError("scores and candidate_sids must be [B,T] and [B,T,L]")
     if candidate_behavior_ids.shape != semantic_scores.shape:
         raise ValueError("candidate_behavior_ids must match scores")
     if padding_mask.shape != semantic_scores.shape or padding_mask.dtype != torch.bool:

@@ -70,7 +70,15 @@ def training_item_ids(
         if boundaries.split_for(event.timestamp_ms) is Split.TRAIN
     )
 
-
+    """
+    按照用户和时间遍历：
+    NextItemSample(
+        split,
+        user_id,
+        history=(event_1, ..., event_n),
+        target=event_n+1,
+    )
+    """
 def build_next_item_samples(
     events: Iterable[InteractionEvent],
     boundaries: TemporalBoundaries,

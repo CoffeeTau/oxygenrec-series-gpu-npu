@@ -13,7 +13,7 @@ from typing import Sequence
 
 @dataclass(frozen=True)
 class LLMFeatureBatch:
-    """LLM 特征及每条输入的有效 token 数。features 实际为 Tensor[B,D]。"""
+    """LLM 特征及每条输入的有效 token 数。features 实际为 Tensor[B,H]。"""
     features: object
     token_counts: tuple[int, ...]
 
@@ -76,7 +76,7 @@ class FrozenLLMInstructionEncoder:
         self.hidden_size = int(self.model.config.hidden_size)
 
     def encode(self, texts: Sequence[str], *, pooling: str = "mean") -> LLMFeatureBatch:
-        """编码文本为 Tensor[B,D]；支持有效 token 均值或最后有效 token 池化。"""
+        """编码文本为 Tensor[B,H]；支持有效 token 均值或最后有效 token 池化。"""
         import torch
         import torch.nn.functional as F
 

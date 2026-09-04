@@ -64,8 +64,8 @@ def retailrocket_event_from_row(
 
     transaction_id = row.get("transactionid", "").strip() or None
     return InteractionEvent(
-        timestamp_ms=int(row["timestamp"]),
-        source_row=source_row,
+        timestamp_ms=int(row["timestamp"]),  # 3 位 Unix 时间戳，单位为毫秒，例如1433221275206 = 1433221275 s + 206 ms
+        source_row=source_row,               # 原始events.csv中的物理行号，时间戳相同的时候，会按原始的CSV行号排序
         user_id=row["visitorid"].strip(),
         item_id=row["itemid"].strip(),
         behavior=behavior,

@@ -11,7 +11,7 @@ from .temporal import NextItemSample
 
 @dataclass(frozen=True)
 class SIDModelBatch:
-    """普通短历史批次；主要张量逻辑形状为 history=[B,H,L]、target=[B,L]。"""
+    """普通短历史批次；主要张量逻辑形状为 history=[B,T,L]、target=[B,L]。"""
     history_sids: tuple[tuple[tuple[int, ...], ...], ...]
     history_padding_mask: tuple[tuple[bool, ...], ...]
     history_behavior_ids: tuple[tuple[int, ...], ...]
@@ -58,7 +58,7 @@ def build_sid_model_batch(
             raise ValueError(
                 f"target item {sample.target.item_id!r} is absent from SID registry"
             )
-        # 只保留可编码商品，并截取最近 H 个事件。
+        # 只保留可编码商品，并截取最近 T 个事件。
         known_events = [
             event
             for event in sample.history
