@@ -14,7 +14,14 @@ from torch import Tensor, nn
 import torch.nn.functional as F
 
 from .sid import PrefixTrie
-from .retrieval_planning import ExecutableRetrievalPlan, execute_retrieval_plan
+from .retrieval_planning import (
+    AGENTIC_PLAN,
+    PAPER_IGR,
+    RETRIEVAL_MODES,
+    ExecutableRetrievalPlan,
+    RetrievalMode,
+    execute_retrieval_plan,
+)
 
 
 @dataclass(frozen=True)
@@ -196,6 +203,7 @@ class OxygenRECModel(nn.Module):
         long_history_padding_mask: Tensor | None = None,
         long_history_behavior_ids: Tensor | None = None,
         retrieval_plans: Sequence[ExecutableRetrievalPlan] | None = None,
+        retrieval_mode: RetrievalMode = PAPER_IGR,
         level_weights: Sequence[float] | Tensor | None = None,
     ) -> OxygenRECOutput:
         """执行主前向：构造 query、可选 IGR、Encoder、Decoder 和联合损失。
@@ -226,6 +234,7 @@ class OxygenRECModel(nn.Module):
             long_history_padding_mask, query,
             long_history_behavior_ids=long_history_behavior_ids,
             retrieval_plans=retrieval_plans,
+            retrieval_mode=retrieval_mode,
         )
         if long_history_sids is not None and history_behavior_ids is not None:
             raise ValueError("behavior-conditioned IGR requires long-history behavior IDs")
@@ -380,15 +389,24 @@ class OxygenRECModel(nn.Module):
         long_mask: Tensor | None, query: Tensor, *,
         long_history_behavior_ids: Tensor | None = None,
         retrieval_plans: Sequence[ExecutableRetrievalPlan] | None = None,
+        retrieval_mode: RetrievalMode = PAPER_IGR,
     ) -> tuple[Tensor, Tensor, Tensor | None, Tensor | None]:
         """用 query 检索长历史并把 top-k SID 拼接到短历史。
 
         short_sids=[B,T_short,L]，long_sids=[B,T_long,L]，query=[B,Q]；
         返回的历史长度为 T_short+K。没有长历史时原样返回短历史。
         """
+        if retrieval_mode not in RETRIEVAL_MODES:
+            raise ValueError(f"unsupported retrieval_mode: {retrieval_mode!r}")
+        if retrieval_mode == PAPER_IGR and retrieval_plans is not None:
+            raise ValueError("paper_igr does not consume retrieval_plans")
+        if retrieval_mode == AGENTIC_PLAN and retrieval_plans is None:
+            raise ValueError("agentic_plan requires retrieval_plans")
         if long_sids is None:
             if long_mask is not None:
                 raise ValueError("long_history_padding_mask requires long_history_sids")
+            if retrieval_mode == AGENTIC_PLAN:
+                raise ValueError("agentic_plan requires long_history_sids")
             return short_sids, short_mask, None, None
         if self.config.igr_top_k < 1:
             raise ValueError("igr_top_k must be positive when long history is provided")
@@ -404,7 +422,7 @@ class OxygenRECModel(nn.Module):
         )
         # 归一化 query 与 item 做点积即 cosine，padding 位置设为 -inf。
         scores = torch.einsum("bd,bhd->bh", query, long_vectors).masked_fill(long_mask, float("-inf"))
-        if retrieval_plans is None:
+        if retrieval_mode == PAPER_IGR:
             top_scores, top_indices = scores.topk(self.config.igr_top_k, dim=1)
         else:
             if long_history_behavior_ids is None:
@@ -531,6 +549,7 @@ class OxygenRECModel(nn.Module):
         long_history_padding_mask: Tensor | None = None,
         long_history_behavior_ids: Tensor | None = None,
         retrieval_plans: Sequence[ExecutableRetrievalPlan] | None = None,
+        retrieval_mode: RetrievalMode = PAPER_IGR,
     ) -> Tensor:
         """对固定 rollout 候选做 teacher forcing，返回每层 log-prob [B,G,L]。"""
         if candidate_sids.ndim != 3:
@@ -573,6 +592,7 @@ class OxygenRECModel(nn.Module):
             long_history_padding_mask=expand_features(long_history_padding_mask),
             long_history_behavior_ids=expand_features(long_history_behavior_ids),
             retrieval_plans=expanded_plans,
+            retrieval_mode=retrieval_mode,
         )
         selected = []
         for level, logits in enumerate(output.logits):
@@ -599,6 +619,7 @@ class OxygenRECModel(nn.Module):
         long_history_padding_mask: Tensor | None = None,
         long_history_behavior_ids: Tensor | None = None,
         retrieval_plans: Sequence[ExecutableRetrievalPlan] | None = None,
+        retrieval_mode: RetrievalMode = PAPER_IGR,
     ) -> Tensor:
         """用 PrefixTrie 屏蔽非法 code，贪心生成合法三层 SID。"""
 
@@ -618,6 +639,7 @@ class OxygenRECModel(nn.Module):
             long_history_padding_mask, query,
             long_history_behavior_ids=long_history_behavior_ids,
             retrieval_plans=retrieval_plans,
+            retrieval_mode=retrieval_mode,
         )
         if long_history_sids is not None and history_behavior_ids is not None:
             raise ValueError("behavior-conditioned IGR requires long-history behavior IDs")
@@ -662,6 +684,7 @@ class OxygenRECModel(nn.Module):
         long_history_padding_mask: Tensor | None = None,
         long_history_behavior_ids: Tensor | None = None,
         retrieval_plans: Sequence[ExecutableRetrievalPlan] | None = None,
+        retrieval_mode: RetrievalMode = PAPER_IGR,
     ) -> BeamSearchOutput:
         """便于审计的约束 beam search；同分时按 SID 字典序稳定打破平局。"""
 
@@ -683,6 +706,7 @@ class OxygenRECModel(nn.Module):
             long_history_padding_mask, query,
             long_history_behavior_ids=long_history_behavior_ids,
             retrieval_plans=retrieval_plans,
+            retrieval_mode=retrieval_mode,
         )
         if long_history_sids is not None and history_behavior_ids is not None:
             raise ValueError("behavior-conditioned IGR requires long-history behavior IDs")

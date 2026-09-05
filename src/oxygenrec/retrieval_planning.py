@@ -3,10 +3,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Mapping, Sequence
+from typing import Literal, Mapping, Sequence
 
 
 BEHAVIOR_IDS = {"view": 0, "addtocart": 1, "transaction": 2}
+
+# paper_igr严格对应论文的query-item余弦Top-K；agentic_plan在相同语义分数上
+# 额外执行结构化Plan。显式模式名可避免把工程扩展误记为论文原始方法。
+RetrievalMode = Literal["paper_igr", "agentic_plan"]
+PAPER_IGR: RetrievalMode = "paper_igr"
+AGENTIC_PLAN: RetrievalMode = "agentic_plan"
+RETRIEVAL_MODES = (PAPER_IGR, AGENTIC_PLAN)
 
 
 @dataclass(frozen=True)

@@ -5,7 +5,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 from pathlib import Path
-from typing import Sequence
+from typing import Mapping, Sequence
+
+from .llm_features import LLMFeatureBatch
 
 
 REQUIRED_REASONING_KEYS = (
@@ -18,6 +20,32 @@ class GeneratedReasoning:
     """同时保留模型原始文本和通过严格 schema 校验后的字典。"""
     raw_text: str
     parsed: dict[str, object]
+
+
+def contextual_instruction_text(reasoning: Mapping[str, object]) -> str:
+    """把已校验Reasoning转换成论文主线消费的自然语言指令。
+
+    这里只使用intent、evidence和retrieval_strategy，不读取retrieval_plan。
+    因而paper_igr与agentic_plan可以共享同一份LLM输出，并把“是否执行Plan”
+    保持为唯一实验变量。
+    """
+
+    intent = reasoning.get("intent")
+    evidence = reasoning.get("evidence")
+    strategy = reasoning.get("retrieval_strategy")
+    if not isinstance(intent, str) or not intent.strip():
+        raise ValueError("reasoning intent must be a non-empty string")
+    if not isinstance(strategy, str) or not strategy.strip():
+        raise ValueError("reasoning retrieval_strategy must be a non-empty string")
+    if not isinstance(evidence, list) or not evidence or not all(
+        isinstance(item, str) and item.strip() for item in evidence
+    ):
+        raise ValueError("reasoning evidence must contain non-empty strings")
+    return (
+        f"当前意图：{intent.strip()}\n"
+        f"推理依据：{'；'.join(item.strip() for item in evidence)}\n"
+        f"推荐指令：{strategy.strip()}"
+    )
 
 
 def reasoning_system_prompt() -> str:
@@ -163,3 +191,48 @@ class FrozenLLMReasoningGenerator:
                 ) from error
             results.append(GeneratedReasoning(raw_text=raw, parsed=parsed))
         return results
+
+    def encode_instruction_texts(
+        self, texts: Sequence[str], *, pooling: str = "last_token",
+    ) -> LLMFeatureBatch:
+        """复用同一冻结Qwen，把生成的指令文本编码为Tensor[B,H]。
+
+        论文部署将LLM生成和Adapter文本编码拆成两个服务。本公开复现为了避免
+        在单卡上同时加载两份4B权重，复用同一Qwen backbone提取hidden state；
+        输出随后仍由OxygenREC的可训练instruction adapter完成特征映射。
+        """
+        import torch
+        import torch.nn.functional as F
+
+        if not texts or any(not text.strip() for text in texts):
+            raise ValueError("texts must contain non-empty strings")
+        if pooling not in {"mean", "last_token"}:
+            raise ValueError("pooling must be mean or last_token")
+        tokens = self.tokenizer(
+            list(texts), padding=True, truncation=True,
+            max_length=self.max_input_length, return_tensors="pt",
+        )
+        tokens = {name: value.to(self.device) for name, value in tokens.items()}
+        with torch.inference_mode():
+            outputs = self.model(
+                **tokens, output_hidden_states=True, return_dict=True,
+                use_cache=False,
+            )
+            hidden = outputs.hidden_states[-1]
+            mask = tokens["attention_mask"].unsqueeze(-1).to(hidden.dtype)
+            if pooling == "mean":
+                pooled = (hidden * mask).sum(dim=1) / mask.sum(dim=1).clamp_min(1.0)
+            else:
+                positions = torch.arange(hidden.shape[1], device=self.device)
+                last_indices = (
+                    tokens["attention_mask"] * positions.unsqueeze(0)
+                ).argmax(dim=1)
+                pooled = hidden[
+                    torch.arange(hidden.shape[0], device=self.device), last_indices
+                ]
+            features = F.normalize(pooled.float(), dim=-1)
+        features = features.clone()
+        counts = tuple(
+            int(value) for value in tokens["attention_mask"].sum(dim=1).tolist()
+        )
+        return LLMFeatureBatch(features=features, token_counts=counts)

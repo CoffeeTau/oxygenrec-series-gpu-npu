@@ -127,6 +127,7 @@ def main() -> None:
                 short, short_mask, scenario_ids=scenario,
                 long_history_sids=long, long_history_padding_mask=long_mask,
                 long_history_behavior_ids=long_behaviors, retrieval_plans=[plan],
+                retrieval_mode="agentic_plan",
             )
         before = baseline.igr_indices[0].tolist()
         after = planned.igr_indices[0].tolist()

@@ -57,6 +57,7 @@ def main() -> None:
         long_history_padding_mask=long_mask,
         long_history_behavior_ids=long_behaviors,
         retrieval_plans=plans,
+        retrieval_mode="agentic_plan",
     )
 
     calls: list[str] = []

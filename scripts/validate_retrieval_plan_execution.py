@@ -53,6 +53,7 @@ def main() -> None:
             long_history_padding_mask=mask,
             long_history_behavior_ids=behaviors,
             retrieval_plans=plans,
+            retrieval_mode="agentic_plan",
         )
     if model_output.igr_indices is None or model_output.igr_indices.shape != (len(plans), 3):
         raise RuntimeError("model IGR did not return plan-controlled indices")

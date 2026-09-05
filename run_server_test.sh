@@ -5,7 +5,6 @@ set -euo pipefail
 project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$project_dir"
 
-python scripts/audit_reasoning_sft_candidates.py \
-    --input data/sft/retailrocket_reasoning_review_stratified.jsonl \
-    --output data/sft/retailrocket_reasoning_fidelity_audit.json \
-    --review-samples 6
+CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}" python scripts/validate_qwen_dual_retrieval_modes.py \
+    --model-path models/Qwen3-4B-Instruct-2507 \
+    --device cuda

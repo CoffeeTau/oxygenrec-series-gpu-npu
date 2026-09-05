@@ -1,5 +1,44 @@
 # Qwen真实Instruction表示接入方案
 
+## 0. 两种可切换检索模式（2026-09-05）
+
+当前代码把论文主线与Agentic Search扩展明确分开：
+
+| `retrieval_mode` | 输入链路 | 检索行为 | 定位 |
+|---|---|---|---|
+| `paper_igr` | Qwen生成Reasoning JSON中的`intent/evidence/retrieval_strategy` → 自然语言Instruction → Qwen hidden state → `instruction_features` → query | query与长历史item向量做余弦Top-K | OxygenREC论文主线，默认模式 |
+| `agentic_plan` | 与`paper_igr`使用完全相同的Instruction特征和query，另外读取`retrieval_plan` | 在相同semantic scores上执行行为、时效、重复和多样性有界重排 | 本项目的Agentic Search扩展 |
+
+模型公开入口`src/oxygenrec/model.py`中的`OxygenRECModel.forward()`、
+`generate()`、`beam_search()`和`candidate_log_probs()`均接受同一个开关：
+
+```python
+# 论文主线：不允许传retrieval_plans。
+paper = model(..., instruction_features=features, retrieval_mode="paper_igr")
+
+# Agentic扩展：必须显式传入已编译Plan。
+agentic = model(
+    ...,
+    instruction_features=features,
+    retrieval_mode="agentic_plan",
+    retrieval_plans=plans,
+)
+```
+
+`src/oxygenrec/llm_reasoning.py`中的`contextual_instruction_text()`故意不读取
+`retrieval_plan`。因此最终paired实验可以固定数据、Qwen输出、Instruction特征、
+query和OxygenREC checkpoint，只比较是否执行Plan重排。
+
+单卡端到端验收：
+
+```bash
+CUDA_VISIBLE_DEVICES=0 bash run_server_test.sh
+```
+
+该入口会实际执行：Qwen生成结构化Reasoning → 拼装论文式自然语言Instruction →
+同一冻结Qwen编码hidden state → OxygenREC instruction adapter/Q2I/query →
+`paper_igr`与`agentic_plan`两次检索，并检查模式互斥契约。
+
 ## 1. 第一阶段型号
 
 首个GPU基线选择：`Qwen/Qwen3-4B-Instruct-2507`。

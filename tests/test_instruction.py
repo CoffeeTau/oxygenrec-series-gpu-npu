@@ -84,6 +84,7 @@ class InstructionQ2IIGRTest(unittest.TestCase):
             long_history_sids=self.long, long_history_padding_mask=self.long_mask,
             long_history_behavior_ids=torch.tensor([[0, 2, 0, 0]] * 2),
             retrieval_plans=plans,
+            retrieval_mode="agentic_plan",
         )
         self.assertEqual(tuple(output.igr_indices.shape), (2, 2))
         self.assertTrue((output.igr_indices < 3).all())
@@ -108,6 +109,7 @@ class InstructionQ2IIGRTest(unittest.TestCase):
             long_history_padding_mask=self.long_mask,
             long_history_behavior_ids=long_behaviors,
             retrieval_plans=plans,
+            retrieval_mode="agentic_plan",
         )
         with patch.object(
             model_module, "execute_retrieval_plan",
@@ -122,6 +124,39 @@ class InstructionQ2IIGRTest(unittest.TestCase):
         self.assertEqual(execute.call_count, 2)
         self.assertEqual(tuple(generated.shape), (2, 3))
         self.assertEqual(tuple(beams.semantic_ids.shape), (2, 2, 3))
+
+    def test_retrieval_mode_keeps_paper_and_agentic_paths_explicit(self):
+        from oxygenrec.retrieval_planning import compile_retrieval_plan
+
+        plans = [compile_retrieval_plan(
+            {"priority_behaviors": ["view"], "recency": "balanced",
+             "prefer_repeated_items": False, "diversity": "low"},
+            {"view": 3},
+        )] * 2
+        shared = dict(
+            instruction_features=self.features,
+            long_history_sids=self.long,
+            long_history_padding_mask=self.long_mask,
+            long_history_behavior_ids=torch.tensor([[0, 0, 0, 0]] * 2),
+        )
+        paper = self.model(
+            self.short, self.short_mask, retrieval_mode="paper_igr", **shared,
+        )
+        agentic = self.model(
+            self.short, self.short_mask, retrieval_mode="agentic_plan",
+            retrieval_plans=plans, **shared,
+        )
+        self.assertEqual(tuple(paper.igr_indices.shape), (2, 2))
+        self.assertEqual(tuple(agentic.igr_indices.shape), (2, 2))
+        with self.assertRaisesRegex(ValueError, "does not consume"):
+            self.model(
+                self.short, self.short_mask, retrieval_mode="paper_igr",
+                retrieval_plans=plans, **shared,
+            )
+        with self.assertRaisesRegex(ValueError, "requires retrieval_plans"):
+            self.model(
+                self.short, self.short_mask, retrieval_mode="agentic_plan", **shared,
+            )
 
 
 if __name__ == "__main__":
