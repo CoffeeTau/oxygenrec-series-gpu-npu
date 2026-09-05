@@ -5,7 +5,7 @@ set -euo pipefail
 project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$project_dir"
 
-python scripts/export_reasoning_review_subset.py \
+python scripts/audit_reasoning_sft_candidates.py \
     --input data/sft/retailrocket_reasoning_review_stratified.jsonl \
-    --audit data/sft/retailrocket_reasoning_audit_stratified.json \
-    --output outputs/review/qwen_sft_stratified_subset.md
+    --output data/sft/retailrocket_reasoning_fidelity_audit.json \
+    --review-samples 6

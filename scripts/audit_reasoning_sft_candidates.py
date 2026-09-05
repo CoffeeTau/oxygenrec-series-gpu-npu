@@ -14,6 +14,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from oxygenrec.llm_reasoning import parse_reasoning_json
 from oxygenrec.retrieval_planning import compile_retrieval_plan
+from oxygenrec.sft_data import reasoning_fidelity_issues
 
 
 def parse_args() -> argparse.Namespace:
@@ -37,6 +38,8 @@ def audit(records: list[dict[str, object]], review_samples: int) -> dict[str, ob
     assistant_outputs: Counter[str] = Counter()
     evidence_lengths = []
     review_pool: list[tuple[int, int, int, str]] = []
+    fidelity_issue_counts: Counter[str] = Counter()
+    fidelity_pass = 0
 
     for record in records:
         case_id = record.get("case_id")
@@ -66,6 +69,11 @@ def audit(records: list[dict[str, object]], review_samples: int) -> dict[str, ob
         repeated = int(evidence.get("repeated_item_kinds", 0))
         history = int(evidence.get("history_length", 0))
         review_pool.append((high_intent, repeated, history, case_id))
+        issues = reasoning_fidelity_issues(record)
+        if issues:
+            fidelity_issue_counts.update(issues)
+        else:
+            fidelity_pass += 1
 
     # 优先抽查高意图、重复访问和长历史样例；只输出匿名 case_id，不输出原始行为文本。
     review_pool.sort(reverse=True)
@@ -87,6 +95,9 @@ def audit(records: list[dict[str, object]], review_samples: int) -> dict[str, ob
         "evidence_count_min": min(evidence_lengths),
         "evidence_count_max": max(evidence_lengths),
         "review_sample_case_ids": selected,
+        "automatic_fidelity_pass": fidelity_pass,
+        "automatic_fidelity_reject": len(records) - fidelity_pass,
+        "fidelity_issue_counts": dict(sorted(fidelity_issue_counts.items())),
     }
 
 

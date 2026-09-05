@@ -4,7 +4,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from oxygenrec.sft_data import build_reasoning_sft_example
+from oxygenrec.sft_data import build_reasoning_sft_example, reasoning_fidelity_issues
 
 
 def valid_record(status="approved"):
@@ -49,6 +49,14 @@ class SFTDataTest(unittest.TestCase):
         record["reasoning"]["retrieval_plan"]["priority_behaviors"] = ["transaction"]
         with self.assertRaisesRegex(ValueError, "no priority behavior observed"):
             build_reasoning_sft_example(record)
+
+    def test_fidelity_gate_rejects_omitted_transaction(self):
+        record = valid_record()
+        record["input_evidence"]["behavior_counts"]["transaction"] = 2
+        self.assertIn(
+            "transaction_evidence_missing_from_priority",
+            reasoning_fidelity_issues(record),
+        )
 
 
 if __name__ == "__main__":
