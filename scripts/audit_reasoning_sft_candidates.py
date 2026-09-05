@@ -33,6 +33,7 @@ def audit(records: list[dict[str, object]], review_samples: int) -> dict[str, ob
     diversities: Counter[str] = Counter()
     repeats: Counter[bool] = Counter()
     target_behaviors: Counter[str] = Counter()
+    evidence_cohorts: Counter[str] = Counter()
     assistant_outputs: Counter[str] = Counter()
     evidence_lengths = []
     review_pool: list[tuple[int, int, int, str]] = []
@@ -50,6 +51,7 @@ def audit(records: list[dict[str, object]], review_samples: int) -> dict[str, ob
         compile_retrieval_plan(parsed["retrieval_plan"], counts)
         plan = parsed["retrieval_plan"]
         statuses[str(record.get("review_status", "pending"))] += 1
+        evidence_cohorts[str(record.get("evidence_cohort", "unspecified"))] += 1
         priorities[tuple(plan["priority_behaviors"])] += 1
         recencies[str(plan["recency"])] += 1
         diversities[str(plan["diversity"])] += 1
@@ -79,6 +81,7 @@ def audit(records: list[dict[str, object]], review_samples: int) -> dict[str, ob
         "diversity": dict(sorted(diversities.items())),
         "prefer_repeated_items": {str(key): value for key, value in sorted(repeats.items())},
         "behavior_presence": dict(sorted(target_behaviors.items())),
+        "evidence_cohorts": dict(sorted(evidence_cohorts.items())),
         "unique_reasoning_rate": len(assistant_outputs) / len(records),
         "duplicate_reasoning_rows": duplicate_rows,
         "evidence_count_min": min(evidence_lengths),

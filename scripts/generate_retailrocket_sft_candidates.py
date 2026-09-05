@@ -18,6 +18,7 @@ from oxygenrec.data.events import load_retailrocket_events
 from oxygenrec.data.temporal import Split, TemporalBoundaries, build_next_item_samples
 from oxygenrec.llm_features import build_behavior_prompt
 from oxygenrec.llm_reasoning import FrozenLLMReasoningGenerator
+from oxygenrec.sft_sampling import evidence_cohort, select_stratified_sft_samples
 
 
 def parse_args() -> argparse.Namespace:
@@ -30,29 +31,31 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--batch-size", type=int, default=4)
     parser.add_argument("--sample-seed", type=int, default=2026)
     parser.add_argument("--max-history", type=int, default=120)
+    parser.add_argument("--sampling-pool", type=int, default=4096)
     parser.add_argument("--device", default="cuda")
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    if args.cases < 1 or args.batch_size < 1 or args.max_history < 1:
-        raise ValueError("cases, batch-size and max-history must be positive")
+    if min(args.cases, args.batch_size, args.max_history, args.sampling_pool) < 1:
+        raise ValueError("cases, batch-size, max-history and sampling-pool must be positive")
+    if args.sampling_pool < args.cases:
+        raise ValueError("sampling-pool must be at least cases")
     payload = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
     boundaries = TemporalBoundaries(**payload["boundaries"])
     samples = build_next_item_samples(
         load_retailrocket_events(args.events), boundaries,
         min_history=1, max_history=args.max_history,
         max_samples_per_split={
-            Split.TRAIN: args.cases,
+            Split.TRAIN: args.sampling_pool,
             Split.VALIDATION: 1,
             Split.TEST: 1,
         },
         sample_seed=args.sample_seed,
     )
-    train_samples = [sample for sample in samples if sample.split is Split.TRAIN]
-    if len(train_samples) != args.cases:
-        raise RuntimeError(f"expected {args.cases} train cases, got {len(train_samples)}")
+    train_pool = [sample for sample in samples if sample.split is Split.TRAIN]
+    train_samples, cohort_counts = select_stratified_sft_samples(train_pool, args.cases)
 
     generator = FrozenLLMReasoningGenerator(
         args.model_path, device=args.device, dtype="bfloat16",
@@ -74,8 +77,8 @@ def main() -> None:
             evidence_rows.append(evidence)
             prompts.append(build_behavior_prompt(**evidence))
         generated = generator.generate(prompts, max_new_tokens=384)
-        for offset, (evidence, prompt, output) in enumerate(
-            zip(evidence_rows, prompts, generated, strict=True), start=start + 1,
+        for offset, (sample, evidence, prompt, output) in enumerate(
+            zip(batch, evidence_rows, prompts, generated, strict=True), start=start + 1,
         ):
             records.append({
                 "case_id": f"train-{offset:06d}",
@@ -86,6 +89,7 @@ def main() -> None:
                 "reasoning": output.parsed,
                 "raw_text": output.raw_text,
                 "sampling": {"sample_seed": args.sample_seed, "split": "train"},
+                "evidence_cohort": evidence_cohort(sample),
             })
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
@@ -95,7 +99,7 @@ def main() -> None:
     )
     print(
         f"OK device={args.device} candidates={len(records)} split=train "
-        f"review_status=pending output={args.output}"
+        f"cohorts={cohort_counts} review_status=pending output={args.output}"
     )
 
 
