@@ -43,6 +43,10 @@ class InstructionQ2IIGRTest(unittest.TestCase):
             long_history_padding_mask=self.long_mask,
         )
         self.assertIsNotNone(output.q2i_loss)
+        self.assertEqual(tuple(output.q2i_cosine.shape), (2,))
+        torch.testing.assert_close(
+            output.q2i_alignment_loss, -output.q2i_cosine.mean()
+        )
         self.assertEqual(tuple(output.igr_indices.shape), (2, 2))
         self.assertTrue((output.igr_indices < 3).all())
         self.assertTrue((output.igr_scores[:, :-1] >= output.igr_scores[:, 1:]).all())

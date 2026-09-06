@@ -92,6 +92,7 @@ class OxygenRECOutput:
     ntp_loss: Tensor | None = None
     q2i_loss: Tensor | None = None
     q2i_alignment_loss: Tensor | None = None
+    q2i_cosine: Tensor | None = None
     igr_indices: Tensor | None = None
     igr_scores: Tensor | None = None
 
@@ -256,15 +257,17 @@ class OxygenRECModel(nn.Module):
             logits, target_sids, level_weights, sample_weights=sample_weights
         )
         loss = ntp_loss
-        q2i_loss = alignment_loss = None
+        q2i_loss = alignment_loss = q2i_cosine = None
         # 5) Q2I 让 query 靠近目标商品向量；总损失=NTP+权重*Q2I。
         if self.config.q2i_weight > 0:
             targets = F.normalize(self.item_adapter(self._item_embedding(target_sids)), dim=-1)
+            q2i_cosine = (query * targets).sum(dim=-1)
             q2i_loss, alignment_loss = self.q2i_alignment_loss(query, targets)
             loss = ntp_loss + self.config.q2i_weight * q2i_loss
         return OxygenRECOutput(
             logits=logits, loss=loss, level_losses=level_losses, ntp_loss=ntp_loss,
             q2i_loss=q2i_loss, q2i_alignment_loss=alignment_loss,
+            q2i_cosine=q2i_cosine,
             igr_indices=igr_indices, igr_scores=igr_scores,
         )
 
