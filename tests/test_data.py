@@ -205,6 +205,11 @@ class TemporalSamplesTest(unittest.TestCase):
             future.timestamp_ms > max(target.timestamp_ms for target in train_view.targets)
             for future in train_view.future_targets
         ))
+        deployment = train_view.without_privileged_future()
+        self.assertEqual(deployment.history, train_view.history)
+        self.assertEqual(deployment.targets, train_view.targets)
+        self.assertEqual(deployment.future_targets, ())
+        self.assertNotEqual(deployment, train_view)
 
     def test_daily_listwise_can_require_nonempty_future_prefix(self):
         day = 86_400_000

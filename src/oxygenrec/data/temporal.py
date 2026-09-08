@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from bisect import bisect_right
 from collections import Counter, defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 import random
 from typing import Iterable, Mapping, Sequence
@@ -101,6 +101,12 @@ class ListwiseTargetSample:
     def target_behavior(self) -> Behavior:
         """返回该列表共同使用的目标行为标签。"""
         return self.targets[0].behavior
+
+    def without_privileged_future(self) -> "ListwiseTargetSample":
+        """返回部署Student可见的样本视图，显式移除Teacher未来信息。"""
+        if not self.future_targets:
+            return self
+        return replace(self, future_targets=())
 
 
 def training_item_ids(

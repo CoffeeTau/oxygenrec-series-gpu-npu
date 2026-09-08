@@ -329,6 +329,11 @@ def main() -> None:
         raise RuntimeError(
             "real EA-TOSD cohort is empty; lower the future behavior threshold or list size"
         )
+    # evaluate()复用部署Student的listwise批处理，不接受也不应看到F。
+    # 保留validation的相同history/gold队列，只显式移除Teacher专用字段。
+    deployment_validation_samples = [
+        sample.without_privileged_future() for sample in validation_samples
+    ]
     future_counts = Counter(len(sample.future_targets) for sample in train_samples)
     behavior_counts = Counter(sample.target_behavior.value for sample in train_samples)
     print(
@@ -342,7 +347,7 @@ def main() -> None:
     # 固定同一批“存在未来反馈”的validation样本做前后比较；这是结构smoke，
     # 存在future-eligible选择条件，不能当作无偏泛化收益。
     before_metrics, _ = evaluate(
-        model, validation_samples, registry, trie, args, device
+        model, deployment_validation_samples, registry, trie, args, device
     )
     objective_config = EATOSDConfig(
         geometric_decay=args.geometric_decay,
@@ -473,7 +478,7 @@ def main() -> None:
                 })
 
     after_metrics, _ = evaluate(
-        model, validation_samples, registry, trie, args, device
+        model, deployment_validation_samples, registry, trie, args, device
     )
     sample_count = totals["samples"]
     summary = {
