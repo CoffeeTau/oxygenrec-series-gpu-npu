@@ -32,7 +32,7 @@ Decoder → 生成多个商品 SID
 | 模块                                      | 当前状态 | 已验证内容 | 问题  |
 | --------------------------------------- | ---- | ----- | --- |
 | Behavior Instruction（Decoder 端行为指令）     | 已完成CUDA方法验证 | 保留行为token、两层投影、`[BOS,I_s,I_r,I_b]`及全部解码接口 | 具体CUDA数值未留存；尚未接真实列表式数据 |
-| Behavior-aware Pretraining（行为感知的列表式预训练） | 部分代码完成，待CUDA | 逐事件目标行为ID和单目标token级`1.2/1.5/2.0`权重 | 需继续实现`[B,3N]`列表式解码 |
+| Behavior-aware Pretraining（行为感知的列表式预训练） | 单目标CUDA通过，列表式代码待CUDA | 逐事件目标行为ID、`1.2/1.5/2.0`权重及`[B,N,3]→[B,3N]`自回归/约束解码 | 需验证行为同质列表CUDA闭环，再接真实列表构造 |
 | EA-TOSD（熵感知的轨迹优化自蒸馏）                    | 未开始 | 无 | 冻结v1外部Reward目标，仅复用后续需要的轨迹基础设施 |
 
 # NPU侧Oxygenrec-series迁移与调优

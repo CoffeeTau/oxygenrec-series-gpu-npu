@@ -51,6 +51,8 @@ class OxygenRECConfig:
     feedforward_size: int = 512
     dropout: float = 0.1
     max_history_items: int = 256
+    # v1默认为单目标；v2列表式训练按N个商品预留3N个SID解码位置。
+    max_target_items: int = 1
 
     def __post_init__(self) -> None:
         positive = {
@@ -65,6 +67,7 @@ class OxygenRECConfig:
             "decoder_layers": self.decoder_layers,
             "feedforward_size": self.feedforward_size,
             "max_history_items": self.max_history_items,
+            "max_target_items": self.max_target_items,
         }
         for name, value in positive.items():
             if value < 1:
@@ -94,7 +97,7 @@ class OxygenRECConfig:
 
 @dataclass(frozen=True)
 class OxygenRECOutput:
-    """三层 SID logits、NTP/Q2I loss 以及可选 IGR 诊断结果。"""
+    """逐SID token logits、NTP/Q2I loss以及可选IGR诊断结果。"""
 
     logits: tuple[Tensor, ...]
     loss: Tensor | None = None
@@ -111,7 +114,7 @@ class OxygenRECOutput:
 class BeamSearchOutput:
     """按累计对数概率排序的合法 SID 路径。"""
 
-    semantic_ids: Tensor  # [batch, beam, levels]
+    semantic_ids: Tensor  # [B, beam, 3N]
     scores: Tensor  # [batch, beam]
 
 
@@ -174,8 +177,10 @@ class OxygenRECModel(nn.Module):
         )
         self.bos_embedding = nn.Parameter(torch.empty(config.hidden_size))
         self.decoder_positions = nn.Embedding(
-            # v1 需要 3 个前缀位置中的最后一个来预测首层 SID；v2 多一个 I_b。
-            config.sid_levels + 2 + int(config.behavior_instruction_vocab_size > 0),
+            # 长度=P+3N-1；v1前缀P=3，v2带I_b时P=4。
+            config.sid_levels * config.max_target_items
+            + 2
+            + int(config.behavior_instruction_vocab_size > 0),
             config.hidden_size,
         )
 
@@ -201,7 +206,7 @@ class OxygenRECModel(nn.Module):
         self.decoder = nn.TransformerDecoder(
             decoder_layer, config.decoder_layers, norm=nn.LayerNorm(config.hidden_size)
         )
-        # Decoder 的三个位置分别预测 SID level 0/1/2。
+        # 三个预测头分别负责SID level 0/1/2；列表生成时按每个商品循环复用。
         self.prediction_heads = nn.ModuleList(
             nn.Linear(config.hidden_size, config.sid_width, bias=False)
             for _ in range(config.sid_levels)
@@ -235,12 +240,14 @@ class OxygenRECModel(nn.Module):
         retrieval_plans: Sequence[ExecutableRetrievalPlan] | None = None,
         retrieval_mode: RetrievalMode = PAPER_IGR,
         level_weights: Sequence[float] | Tensor | None = None,
+        output_items: int = 1,
     ) -> OxygenRECOutput:
         """执行主前向：构造 query、可选 IGR、Encoder、Decoder 和联合损失。
 
         ``history_sids``=[B,T,L]，``history_padding_mask``=[B,T]，其中 True
-        表示 padding。训练时传入 ``target_sids``=[B,L] 做 teacher forcing；
-        不传 target 时，上一层 argmax 会作为下一层前缀。
+        表示 padding。v1训练传入 ``target_sids``=[B,L]；v2列表式训练传入
+        ``target_sids``=[B,N,L]，内部展平为3N个teacher-forcing token。
+        不传target时生成``output_items``个商品。
 
         符号约定：B 为 batch size，T 为序列长度，H 为隐藏维度，
         V 为词表大小，L 为 SID 层数。``behavior_instruction_ids``=[B]
@@ -249,6 +256,8 @@ class OxygenRECModel(nn.Module):
         """
 
         self._validate_inputs(history_sids, history_padding_mask, target_sids)
+        if not 1 <= output_items <= self.config.max_target_items:
+            raise ValueError("output_items must be within configured max_target_items")
         batch_size = history_sids.shape[0]
         instruction_ids = self._default_ids(instruction_ids, batch_size, history_sids.device)
         scenario_ids = self._default_ids(scenario_ids, batch_size, history_sids.device)
@@ -277,23 +286,31 @@ class OxygenRECModel(nn.Module):
         memory = self._encode(encoder_sids, encoder_mask, history_behavior_ids)
         if target_sids is None:
             logits = self._autoregressive_logits(
-                memory, encoder_mask, scenario_prompt, reasoning_prompt, behavior_prompt
+                memory,
+                encoder_mask,
+                scenario_prompt,
+                reasoning_prompt,
+                behavior_prompt,
+                output_items,
             )
             return OxygenRECOutput(logits=logits, igr_indices=igr_indices, igr_scores=igr_scores)
-        # 4) teacher forcing：用真实 SID 前两层作为 Decoder 的已知前缀。
-        prefix = target_sids[:, :-1]
+        # 4) teacher forcing：列表[B,N,L]按商品顺序展平为[B,3N]。
+        flat_targets = self._flatten_target_sids(target_sids)
+        prefix = flat_targets[:, :-1]
         hidden = self._decode(
             memory, encoder_mask, scenario_prompt, reasoning_prompt,
             behavior_prompt, prefix,
         )
         prediction_offset = 3 if behavior_prompt is not None else 2
         logits = tuple(
-            head(hidden[:, level + prediction_offset, :])
-            for level, head in enumerate(self.prediction_heads)
+            self.prediction_heads[step % self.config.sid_levels](
+                hidden[:, step + prediction_offset, :]
+            )
+            for step in range(flat_targets.shape[1])
         )
         ntp_loss, level_losses = self.weighted_ntp_loss(
             logits,
-            target_sids,
+            flat_targets,
             level_weights,
             sample_weights=sample_weights,
             token_weights=token_weights,
@@ -302,6 +319,8 @@ class OxygenRECModel(nn.Module):
         q2i_loss = alignment_loss = q2i_cosine = None
         # 5) Q2I 让 query 靠近目标商品向量；总损失=NTP+权重*Q2I。
         if self.config.q2i_weight > 0:
+            if target_sids.ndim != 2:
+                raise ValueError("Q2I listwise target alignment is not implemented")
             targets = F.normalize(self.item_adapter(self._item_embedding(target_sids)), dim=-1)
             q2i_cosine = (query * targets).sum(dim=-1)
             q2i_loss, alignment_loss = self.q2i_alignment_loss(query, targets)
@@ -320,19 +339,23 @@ class OxygenRECModel(nn.Module):
         scenario_prompt: Tensor,
         reasoning_prompt: Tensor,
         behavior_prompt: Tensor | None,
+        output_items: int,
     ) -> tuple[Tensor, ...]:
-        """无 target 时按 level 0→1→2 贪心产生三组 logits。"""
+        """无target时按level循环，贪心产生N个商品的3N组logits。"""
         prefix = torch.empty(
             (memory.shape[0], 0), dtype=torch.long, device=memory.device
         )
         outputs = []
-        for level, head in enumerate(self.prediction_heads):
+        total_steps = output_items * self.config.sid_levels
+        for step in range(total_steps):
+            level = step % self.config.sid_levels
+            head = self.prediction_heads[level]
             hidden = self._decode(
                 memory, memory_padding_mask, scenario_prompt, reasoning_prompt,
                 behavior_prompt, prefix,
             )
             prediction_offset = 3 if behavior_prompt is not None else 2
-            logits = head(hidden[:, level + prediction_offset, :])
+            logits = head(hidden[:, step + prediction_offset, :])
             outputs.append(logits)
             prefix = torch.cat((prefix, logits.argmax(dim=-1, keepdim=True)), dim=1)
         return tuple(outputs)
@@ -373,6 +396,12 @@ class OxygenRECModel(nn.Module):
             embedding(sids[..., level])
             for level, embedding in enumerate(self.sid_embeddings)
         )
+
+    def _flatten_target_sids(self, target_sids: Tensor) -> Tensor:
+        """把v1的[B,L]或v2的[B,N,L]目标统一转成[B,3N]。"""
+        if target_sids.ndim == 2:
+            return target_sids
+        return target_sids.reshape(target_sids.shape[0], -1)
 
     @staticmethod
     def _default_ids(ids: Tensor | None, batch_size: int, device: torch.device) -> Tensor:
@@ -537,7 +566,7 @@ class OxygenRECModel(nn.Module):
         behavior_prompt: Tensor | None,
         prefix_codes: Tensor | None,
     ) -> Tensor:
-        """以 instruction、BOS 和 SID 前缀为输入执行 causal Decoder。"""
+        """以instruction、BOS和展平SID前缀[B,<=3N-1]执行causal Decoder。"""
         batch_size = memory.shape[0]
         bos = self.bos_embedding.unsqueeze(0).expand(batch_size, -1)
         if behavior_prompt is None:
@@ -548,8 +577,10 @@ class OxygenRECModel(nn.Module):
             tokens = [bos, scenario_prompt, reasoning_prompt, behavior_prompt]
         if prefix_codes is not None:
             tokens.extend(
-                self.sid_embeddings[level](prefix_codes[:, level])
-                for level in range(prefix_codes.shape[1])
+                self.sid_embeddings[step % self.config.sid_levels](
+                    prefix_codes[:, step]
+                )
+                for step in range(prefix_codes.shape[1])
             )
         hidden = torch.stack(tokens, dim=1)
         positions = torch.arange(hidden.shape[1], device=hidden.device)
@@ -602,7 +633,7 @@ class OxygenRECModel(nn.Module):
     ) -> tuple[Tensor, tuple[Tensor, ...]]:
         """计算SID token的加权交叉熵，同时兼容v1样本权重和v2行为权重。
 
-        v1 ``sample_weights`` 会按权重和归一化；v2 ``token_weights``=[B,L]
+        v1 ``sample_weights`` 会按权重和归一化；v2 ``token_weights``=[B,3N]
         严格按论文式 ``mean(w_b * CE)`` 计算，因此不会消除行为权重的绝对尺度。
         两种权重语义不同，不允许在同一次前向中混用。
         """
@@ -671,19 +702,29 @@ class OxygenRECModel(nn.Module):
         retrieval_plans: Sequence[ExecutableRetrievalPlan] | None = None,
         retrieval_mode: RetrievalMode = PAPER_IGR,
     ) -> Tensor:
-        """对固定 rollout 候选做 teacher forcing，返回每层 log-prob [B,G,L]。"""
+        """对固定候选做teacher forcing，返回每个SID token的log-prob [B,G,3N]。"""
         if candidate_sids.ndim != 3:
-            raise ValueError("candidate_sids must have shape [batch, group, levels]")
-        batch, group, levels = candidate_sids.shape
-        if batch != history_sids.shape[0] or levels != self.config.sid_levels:
-            raise ValueError("candidate batch/levels do not match model inputs")
+            raise ValueError("candidate_sids must have shape [batch, group, SID tokens]")
+        batch, group, sid_tokens = candidate_sids.shape
+        if (
+            batch != history_sids.shape[0]
+            or sid_tokens % self.config.sid_levels
+            or not 1 <= sid_tokens // self.config.sid_levels <= self.config.max_target_items
+        ):
+            raise ValueError("candidate batch/token count does not match model inputs")
+        output_items = sid_tokens // self.config.sid_levels
         expanded_history = history_sids[:, None].expand(-1, group, -1, -1).reshape(
-            batch * group, history_sids.shape[1], levels
+            batch * group, history_sids.shape[1], self.config.sid_levels
         )
         expanded_mask = history_padding_mask[:, None].expand(-1, group, -1).reshape(
             batch * group, history_padding_mask.shape[1]
         )
-        targets = candidate_sids.reshape(batch * group, levels)
+        flat_targets = candidate_sids.reshape(batch * group, sid_tokens)
+        targets = (
+            flat_targets
+            if output_items == 1
+            else flat_targets.reshape(batch * group, output_items, self.config.sid_levels)
+        )
         expanded_plans = None
         if retrieval_plans is not None:
             if len(retrieval_plans) != batch:
@@ -716,13 +757,13 @@ class OxygenRECModel(nn.Module):
             retrieval_mode=retrieval_mode,
         )
         selected = []
-        for level, logits in enumerate(output.logits):
+        for step, logits in enumerate(output.logits):
             selected.append(
                 F.log_softmax(logits, dim=-1).gather(
-                    1, targets[:, level : level + 1]
+                    1, flat_targets[:, step : step + 1]
                 ).squeeze(1)
             )
-        return torch.stack(selected, dim=-1).reshape(batch, group, levels)
+        return torch.stack(selected, dim=-1).reshape(batch, group, sid_tokens)
 
     @torch.no_grad() # generate只负责推理生成SID，不进行参数更新，不需要计算图，所以使用这个装饰器来关闭Pytorch的梯度记录
     def generate(
@@ -742,10 +783,13 @@ class OxygenRECModel(nn.Module):
         long_history_behavior_ids: Tensor | None = None,
         retrieval_plans: Sequence[ExecutableRetrievalPlan] | None = None,
         retrieval_mode: RetrievalMode = PAPER_IGR,
+        output_items: int = 1,
     ) -> Tensor:
-        """用 PrefixTrie 屏蔽非法 code，贪心生成合法三层 SID。"""
+        """用PrefixTrie逐商品屏蔽非法code，贪心生成展平的[B,3N]。"""
 
         self._validate_inputs(history_sids, history_padding_mask, None)
+        if not 1 <= output_items <= self.config.max_target_items:
+            raise ValueError("output_items must be within configured max_target_items")
         batch_size = history_sids.shape[0]
         instruction_ids = self._default_ids(instruction_ids, batch_size, history_sids.device)
         scenario_ids = self._default_ids(scenario_ids, batch_size, history_sids.device)
@@ -772,22 +816,29 @@ class OxygenRECModel(nn.Module):
         generated = torch.empty(
             (batch_size, 0), dtype=torch.long, device=history_sids.device
         )
-        for level in range(self.config.sid_levels):
+        total_steps = output_items * self.config.sid_levels
+        for step in range(total_steps):
+            level = step % self.config.sid_levels
             hidden = self._decode(
                 memory, encoder_mask, scenario_prompt, reasoning_prompt,
                 behavior_prompt, generated,
             )
             prediction_offset = 3 if behavior_prompt is not None else 2
             logits = self.prediction_heads[level](
-                hidden[:, level + prediction_offset, :]
+                hidden[:, step + prediction_offset, :]
             )
             selected = []
             for row in range(batch_size):
-                prefix = tuple(int(code) for code in generated[row].tolist())
-                # 只在 registry 中存在的合法前缀续写集合内取 argmax。
-                allowed = trie.allowed_next(prefix)
+                # 每三个token开始一个新商品；列表上下文仍保留在Decoder prefix中。
+                item_start = step - level
+                item_prefix = tuple(
+                    int(code) for code in generated[row, item_start:].tolist()
+                )
+                allowed = trie.allowed_next(item_prefix)
                 if not allowed:
-                    raise ValueError(f"trie has no legal continuation for prefix {prefix}")
+                    raise ValueError(
+                        f"trie has no legal continuation for prefix {item_prefix}"
+                    )
                 allowed_tensor = torch.tensor(
                     allowed, dtype=torch.long, device=logits.device
                 )
@@ -815,12 +866,15 @@ class OxygenRECModel(nn.Module):
         long_history_behavior_ids: Tensor | None = None,
         retrieval_plans: Sequence[ExecutableRetrievalPlan] | None = None,
         retrieval_mode: RetrievalMode = PAPER_IGR,
+        output_items: int = 1,
     ) -> BeamSearchOutput:
-        """便于审计的约束 beam search；同分时按 SID 字典序稳定打破平局。"""
+        """对3N序列做约束beam search；每个商品边界重置Trie前缀。"""
 
         if beam_width < 1:
             raise ValueError("beam_width must be positive")
         self._validate_inputs(history_sids, history_padding_mask, None)
+        if not 1 <= output_items <= self.config.max_target_items:
+            raise ValueError("output_items must be within configured max_target_items")
         batch_size = history_sids.shape[0]
         instruction_ids = self._default_ids(instruction_ids, batch_size, history_sids.device)
         scenario_ids = self._default_ids(scenario_ids, batch_size, history_sids.device)
@@ -848,7 +902,10 @@ class OxygenRECModel(nn.Module):
         all_scores: list[list[float]] = []
         for row in range(batch_size):
             beams: list[tuple[tuple[int, ...], float]] = [((), 0.0)]
-            for level in range(self.config.sid_levels):
+            total_steps = output_items * self.config.sid_levels
+            for step in range(total_steps):
+                level = step % self.config.sid_levels
+                item_start = step - level
                 candidates: list[tuple[tuple[int, ...], float]] = []
                 for prefix, score in beams:
                     prefix_tensor = torch.tensor(
@@ -864,10 +921,10 @@ class OxygenRECModel(nn.Module):
                     )
                     prediction_offset = 3 if behavior_prompt is not None else 2
                     logits = self.prediction_heads[level](
-                        hidden[:, level + prediction_offset, :]
+                        hidden[:, step + prediction_offset, :]
                     )
                     log_probabilities = F.log_softmax(logits[0], dim=-1)
-                    allowed = trie.allowed_next(prefix)
+                    allowed = trie.allowed_next(prefix[item_start:])
                     if not allowed:
                         continue
                     candidates.extend(
@@ -919,11 +976,19 @@ class OxygenRECModel(nn.Module):
             raise ValueError("history_padding_mask must be boolean")
         if history_padding_mask.all(dim=1).any():
             raise ValueError("every sample must contain at least one history item")
-        if target_sids is not None and target_sids.shape != (
-            batch_size,
-            self.config.sid_levels,
-        ):
-            raise ValueError("target_sids must have shape [batch, levels]")
+        if target_sids is not None:
+            single_target = target_sids.shape == (batch_size, self.config.sid_levels)
+            listwise_target = (
+                target_sids.ndim == 3
+                and target_sids.shape[0] == batch_size
+                and target_sids.shape[2] == self.config.sid_levels
+                and 1 <= target_sids.shape[1] <= self.config.max_target_items
+            )
+            if not single_target and not listwise_target:
+                raise ValueError(
+                    "target_sids must have shape [batch, levels] or "
+                    "[batch, items, levels] within max_target_items"
+                )
         for name, tensor in (("history_sids", history_sids), ("target_sids", target_sids)):
             if tensor is None:
                 continue
