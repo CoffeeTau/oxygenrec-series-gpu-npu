@@ -8,10 +8,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Sequence
+from typing import Mapping, Sequence
 
 import torch
-from torch import Tensor
+from torch import Tensor, nn
 import torch.nn.functional as F
 
 
@@ -76,6 +76,14 @@ class EATOSDOutput:
     high_entropy_weights: Tensor  # [B,S]
 
 
+@dataclass(frozen=True)
+class PrivilegedCheckpointLoad:
+    """预训练checkpoint迁入带未来前缀模型时的位置表扩展报告。"""
+
+    copied_position_rows: int
+    initialized_future_rows: int
+
+
 def geometric_token_weights(
     token_count: int,
     decay: float,
@@ -91,6 +99,69 @@ def geometric_token_weights(
     exponents = torch.arange(token_count, device=device, dtype=dtype)
     weights = torch.pow(torch.as_tensor(decay, device=device, dtype=dtype), exponents)
     return weights / weights.sum()
+
+
+def load_pretrained_with_future_positions(
+    model: nn.Module,
+    pretrained_state: Mapping[str, Tensor],
+) -> PrivilegedCheckpointLoad:
+    """严格加载listwise预训练权重，并只扩展Teacher需要的位置表。
+
+    Student所用的旧位置行逐值保留。新增的``3M``行按固定offset从旧表复制：
+    Teacher在物理位置``p+3M``预测时，初始位置向量等于Student位置``p``，
+    避免未训练的随机位置embedding主导privilege advantage。除
+    ``decoder_positions.weight``外出现任何缺失或shape差异都会立即报错。
+    """
+    current_state = model.state_dict()
+    current_keys = set(current_state)
+    pretrained_keys = set(pretrained_state)
+    if current_keys != pretrained_keys:
+        missing = sorted(current_keys - pretrained_keys)
+        unexpected = sorted(pretrained_keys - current_keys)
+        raise ValueError(
+            f"checkpoint keys do not match model: missing={missing[:3]} "
+            f"unexpected={unexpected[:3]}"
+        )
+
+    position_key = "decoder_positions.weight"
+    merged: dict[str, Tensor] = {}
+    initialized_rows = 0
+    copied_rows = 0
+    for key, current in current_state.items():
+        previous = pretrained_state[key]
+        if previous.shape == current.shape:
+            merged[key] = previous
+            if key == position_key:
+                copied_rows = previous.shape[0]
+            continue
+        if key != position_key or previous.ndim != 2 or current.ndim != 2:
+            raise ValueError(
+                f"checkpoint tensor shape mismatch for {key}: "
+                f"{tuple(previous.shape)} != {tuple(current.shape)}"
+            )
+        if previous.shape[1] != current.shape[1] or previous.shape[0] >= current.shape[0]:
+            raise ValueError("decoder position table cannot be expanded from checkpoint")
+        extra_rows = current.shape[0] - previous.shape[0]
+        configured_extra = (
+            model.config.sid_levels * model.config.max_future_items
+        )
+        if extra_rows != configured_extra or previous.shape[0] < extra_rows:
+            raise ValueError(
+                "decoder position difference must equal sid_levels * max_future_items"
+            )
+        adapted = current.clone()
+        adapted[: previous.shape[0]].copy_(previous)
+        for row in range(previous.shape[0], current.shape[0]):
+            adapted[row].copy_(previous[row - extra_rows])
+        merged[key] = adapted
+        copied_rows = previous.shape[0]
+        initialized_rows = extra_rows
+
+    model.load_state_dict(merged, strict=True)
+    return PrivilegedCheckpointLoad(
+        copied_position_rows=copied_rows,
+        initialized_future_rows=initialized_rows,
+    )
 
 
 def select_best_verifiable_trajectory(

@@ -36,13 +36,15 @@ class LongShortSIDModelBatch:
 
 @dataclass(frozen=True)
 class ListwiseSIDModelBatch:
-    """v2列表批次：history=[B,T,L]、targets=[B,N,L]。"""
+    """v2列表批次，并可携带EA-TOSD Teacher未来前缀``[B,M,L]``。"""
 
     history_sids: tuple[tuple[tuple[int, ...], ...], ...]
     history_padding_mask: tuple[tuple[bool, ...], ...]
     history_behavior_ids: tuple[tuple[int, ...], ...]
     target_sids: tuple[tuple[tuple[int, ...], ...], ...]
     target_behavior_ids: tuple[int, ...]
+    future_sids: tuple[tuple[tuple[int, ...], ...], ...]
+    future_padding_mask: tuple[tuple[bool, ...], ...]
 
 
 def build_sid_model_batch(
@@ -113,6 +115,7 @@ def build_listwise_sid_model_batch(
     registry: SIDRegistry,
     *,
     max_history_items: int,
+    max_future_items: int = 0,
 ) -> ListwiseSIDModelBatch:
     """把行为同质列表映射为SID，并把历史在左侧补齐到T。"""
 
@@ -120,6 +123,8 @@ def build_listwise_sid_model_batch(
         raise ValueError("samples must not be empty")
     if max_history_items < 1:
         raise ValueError("max_history_items must be positive")
+    if max_future_items < 0:
+        raise ValueError("max_future_items cannot be negative")
     list_sizes = {len(sample.targets) for sample in samples}
     if len(list_sizes) != 1:
         raise ValueError("all listwise samples in a batch must share list size N")
@@ -129,6 +134,8 @@ def build_listwise_sid_model_batch(
     history_behaviors: list[tuple[int, ...]] = []
     targets: list[tuple[tuple[int, ...], ...]] = []
     target_behaviors: list[int] = []
+    future_rows: list[tuple[tuple[int, ...], ...]] = []
+    future_masks: list[tuple[bool, ...]] = []
     for sample in samples:
         unknown_targets = [
             target.item_id
@@ -156,6 +163,29 @@ def build_listwise_sid_model_batch(
             registry.sid_for(target.item_id).codes for target in sample.targets
         ))
         target_behaviors.append(behavior_id[sample.target_behavior.value])
+        if len(sample.future_targets) > max_future_items:
+            raise ValueError("sample future targets exceed max_future_items")
+        unknown_future = [
+            target.item_id
+            for target in sample.future_targets
+            if target.item_id not in registry.item_to_sid
+        ]
+        if unknown_future:
+            raise ValueError(
+                f"future target items are absent from SID registry: {unknown_future[:3]}"
+            )
+        encoded_future = tuple(
+            registry.sid_for(target.item_id).codes for target in sample.future_targets
+        )
+        future_padding = max_future_items - len(encoded_future)
+        pad_sid = (0,) * registry.levels
+        # 未来前缀左补齐，使最后一个槽始终是最近的真实未来行为。
+        # Decoder用未来块末端状态预测第一个gold token；若右补齐，该读出状态
+        # 会落在padding query上，虽然key已被mask，语义上仍不是我们要的Teacher。
+        future_rows.append((pad_sid,) * future_padding + encoded_future)
+        future_masks.append(
+            (True,) * future_padding + (False,) * len(encoded_future)
+        )
 
     pad_sid = (0,) * registry.levels
     padded_history: list[tuple[tuple[int, ...], ...]] = []
@@ -172,6 +202,8 @@ def build_listwise_sid_model_batch(
         history_behavior_ids=tuple(padded_behaviors),
         target_sids=tuple(targets),
         target_behavior_ids=tuple(target_behaviors),
+        future_sids=tuple(future_rows),
+        future_padding_mask=tuple(future_masks),
     )
 
 

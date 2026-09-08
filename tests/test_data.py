@@ -170,6 +170,59 @@ class TemporalSamplesTest(unittest.TestCase):
         self.assertEqual(len(samples), 1)
         self.assertEqual([target.item_id for target in samples[0].targets], ["a", "b"])
 
+    def test_daily_listwise_builds_strict_future_prefix_with_behavior_threshold(self):
+        day = 86_400_000
+        boundaries = TemporalBoundaries(train_end_ms=day * 2, validation_end_ms=day * 3)
+        events = [
+            event(day + 1, 1, "u1", "context"),
+            event(day + 2, 2, "u1", "a", Behavior.VIEW),
+            event(day + 3, 3, "u1", "b", Behavior.VIEW),
+            event(day + 4, 4, "u1", "c", Behavior.ADD_TO_CART),
+            event(day + 5, 5, "u1", "d", Behavior.VIEW),
+            event(day + 6, 6, "u1", "e", Behavior.TRANSACTION),
+            # 已跨到validation，不能成为train样本的特权未来信息。
+            event(day * 2 + 1, 7, "u1", "f", Behavior.TRANSACTION),
+        ]
+        samples = build_daily_listwise_samples(
+            events,
+            boundaries,
+            list_size=2,
+            # 容量故意大于本split内的合格future数量，才能实际走到split边界。
+            max_future_targets=3,
+            minimum_future_behavior=Behavior.ADD_TO_CART,
+            require_future_targets=True,
+        )
+        train_view = next(
+            sample
+            for sample in samples
+            if sample.split is Split.TRAIN and sample.target_behavior is Behavior.VIEW
+        )
+        self.assertEqual([target.item_id for target in train_view.targets], ["a", "b"])
+        self.assertEqual(
+            [target.item_id for target in train_view.future_targets], ["c", "e"]
+        )
+        self.assertTrue(all(
+            future.timestamp_ms > max(target.timestamp_ms for target in train_view.targets)
+            for future in train_view.future_targets
+        ))
+
+    def test_daily_listwise_can_require_nonempty_future_prefix(self):
+        day = 86_400_000
+        boundaries = TemporalBoundaries(train_end_ms=day * 2, validation_end_ms=day * 3)
+        events = [
+            event(day + 1, 1, "u1", "context"),
+            event(day + 2, 2, "u1", "a"),
+            event(day + 3, 3, "u1", "b"),
+        ]
+        samples = build_daily_listwise_samples(
+            events,
+            boundaries,
+            list_size=2,
+            max_future_targets=2,
+            require_future_targets=True,
+        )
+        self.assertEqual(samples, [])
+
 
 if __name__ == "__main__":
     unittest.main()

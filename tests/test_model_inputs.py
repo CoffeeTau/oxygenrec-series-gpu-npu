@@ -93,9 +93,10 @@ class SIDModelBatchTest(unittest.TestCase):
             (event(day + 1, 1, "a"),),
             targets,
             1,
+            (event(day + 5, 5, "a"),),
         )
         batch = build_listwise_sid_model_batch(
-            [sample], self.registry, max_history_items=2
+            [sample], self.registry, max_history_items=2, max_future_items=2
         )
         self.assertEqual(
             batch.history_sids,
@@ -106,3 +107,5 @@ class SIDModelBatchTest(unittest.TestCase):
             (((4, 5, 6), (7, 8, 9)),),
         )
         self.assertEqual(batch.target_behavior_ids, (1,))
+        self.assertEqual(batch.future_sids, (((0, 0, 0), (1, 2, 3)),))
+        self.assertEqual(batch.future_padding_mask, ((True, False),))

@@ -93,6 +93,41 @@ class EATOSDTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "smaller"):
             EATOSDConfig(low_entropy_threshold=2.0, high_entropy_threshold=1.0)
 
+    def test_checkpoint_expansion_preserves_student_and_aligns_future_positions(self):
+        from oxygenrec.ea_tosd import load_pretrained_with_future_positions
+        from oxygenrec.model import OxygenRECConfig, OxygenRECModel
+
+        common = dict(
+            sid_width=11,
+            behavior_instruction_vocab_size=3,
+            hidden_size=16,
+            attention_heads=4,
+            encoder_layers=1,
+            decoder_layers=1,
+            feedforward_size=32,
+            dropout=0.0,
+            max_history_items=4,
+            max_target_items=2,
+        )
+        old = OxygenRECModel(OxygenRECConfig(**common))
+        with torch.no_grad():
+            for row in range(old.decoder_positions.weight.shape[0]):
+                old.decoder_positions.weight[row].fill_(float(row))
+        new = OxygenRECModel(OxygenRECConfig(**common, max_future_items=2))
+        report = load_pretrained_with_future_positions(new, old.state_dict())
+        old_rows = old.decoder_positions.weight.shape[0]
+        extra = 6
+        self.assertEqual(report.copied_position_rows, old_rows)
+        self.assertEqual(report.initialized_future_rows, extra)
+        torch.testing.assert_close(
+            new.decoder_positions.weight[:old_rows], old.decoder_positions.weight
+        )
+        for row in range(old_rows, old_rows + extra):
+            torch.testing.assert_close(
+                new.decoder_positions.weight[row],
+                old.decoder_positions.weight[row - extra],
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
