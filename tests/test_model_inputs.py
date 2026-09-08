@@ -33,6 +33,7 @@ class SIDModelBatchTest(unittest.TestCase):
         self.assertEqual(batch.history_padding_mask, ((True, False, False),))
         self.assertEqual(batch.history_behavior_ids, ((0, 0, 0),))
         self.assertEqual(batch.target_sids, ((7, 8, 9),))
+        self.assertEqual(batch.target_behavior_ids, (0,))
 
     def test_rejects_target_outside_training_registry(self):
         sample = NextItemSample(
@@ -62,6 +63,7 @@ class SIDModelBatchTest(unittest.TestCase):
         self.assertEqual(batch.long_history_padding_mask[0], (True, False, False))
         self.assertEqual(batch.short_history_behavior_ids[0], (0, 0))
         self.assertEqual(batch.long_history_behavior_ids[0], (0, 0, 0))
+        self.assertEqual(batch.target_behavior_ids, (2,))
         self.assertEqual(batch.scenario_ids, (2,))
 
     def test_long_short_rejects_insufficient_retrieval_candidates(self):

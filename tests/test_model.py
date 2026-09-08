@@ -139,6 +139,38 @@ class OxygenRECModelTest(unittest.TestCase):
         torch.testing.assert_close(torch.stack(levels), torch.stack(expected_levels))
         torch.testing.assert_close(loss, torch.stack(expected_levels).mean())
 
+    def test_behavior_token_weighting_matches_paper_mean(self):
+        logits = (
+            torch.tensor([[3.0, 0.0], [0.0, 1.0]]),
+            torch.tensor([[2.0, 0.0], [0.0, 2.0]]),
+        )
+        targets = torch.tensor([[0, 0], [1, 1]])
+        token_weights = torch.tensor([[1.2, 1.2], [2.0, 2.0]])
+        loss, levels = self.model.weighted_ntp_loss(
+            logits, targets, token_weights=token_weights
+        )
+        per_token = torch.stack([
+            torch.nn.functional.cross_entropy(
+                level_logits, targets[:, level], reduction="none"
+            )
+            for level, level_logits in enumerate(logits)
+        ], dim=1)
+        expected = (per_token * token_weights).mean()
+        torch.testing.assert_close(loss, expected)
+        torch.testing.assert_close(
+            torch.stack(levels), (per_token * token_weights).mean(dim=0)
+        )
+
+    def test_sample_and_token_weights_are_mutually_exclusive(self):
+        logits = tuple(torch.randn(2, 11) for _ in range(3))
+        with self.assertRaisesRegex(ValueError, "cannot be combined"):
+            self.model.weighted_ntp_loss(
+                logits,
+                self.targets,
+                sample_weights=torch.ones(2),
+                token_weights=torch.ones(2, 3),
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

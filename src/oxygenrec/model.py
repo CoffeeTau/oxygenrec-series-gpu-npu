@@ -223,6 +223,7 @@ class OxygenRECModel(nn.Module):
         target_sids: Tensor | None = None,
         history_behavior_ids: Tensor | None = None,
         sample_weights: Tensor | None = None,
+        token_weights: Tensor | None = None,
         instruction_ids: Tensor | None = None,
         scenario_ids: Tensor | None = None,
         behavior_instruction_ids: Tensor | None = None,
@@ -291,7 +292,11 @@ class OxygenRECModel(nn.Module):
             for level, head in enumerate(self.prediction_heads)
         )
         ntp_loss, level_losses = self.weighted_ntp_loss(
-            logits, target_sids, level_weights, sample_weights=sample_weights
+            logits,
+            target_sids,
+            level_weights,
+            sample_weights=sample_weights,
+            token_weights=token_weights,
         )
         loss = ntp_loss
         q2i_loss = alignment_loss = q2i_cosine = None
@@ -593,22 +598,47 @@ class OxygenRECModel(nn.Module):
         level_weights: Sequence[float] | Tensor | None = None,
         *,
         sample_weights: Tensor | None = None,
+        token_weights: Tensor | None = None,
     ) -> tuple[Tensor, tuple[Tensor, ...]]:
-        """计算三层 SID 的加权、归一化交叉熵（weighted NTP）。"""
+        """计算SID token的加权交叉熵，同时兼容v1样本权重和v2行为权重。
 
+        v1 ``sample_weights`` 会按权重和归一化；v2 ``token_weights``=[B,L]
+        严格按论文式 ``mean(w_b * CE)`` 计算，因此不会消除行为权重的绝对尺度。
+        两种权重语义不同，不允许在同一次前向中混用。
+        """
+
+        if sample_weights is not None and token_weights is not None:
+            raise ValueError("sample_weights and token_weights cannot be combined")
         if sample_weights is not None:
             if sample_weights.shape != (target_sids.shape[0],):
                 raise ValueError("sample_weights must have shape [batch]")
             if not torch.isfinite(sample_weights).all() or (sample_weights < 0).any() or sample_weights.sum() <= 0:
                 raise ValueError("sample_weights must be finite, non-negative, and sum positive")
+        if token_weights is not None:
+            expected_shape = (target_sids.shape[0], len(logits))
+            if token_weights.shape != expected_shape:
+                raise ValueError("token_weights must have shape [batch, SID tokens]")
+            if (
+                not torch.isfinite(token_weights).all()
+                or (token_weights < 0).any()
+                or token_weights.sum() <= 0
+            ):
+                raise ValueError(
+                    "token_weights must be finite, non-negative, and sum positive"
+                )
         per_level = tuple(
             F.cross_entropy(level_logits, target_sids[:, level], reduction="none")
             for level, level_logits in enumerate(logits)
         )
         level_losses = tuple(
-            losses.mean() if sample_weights is None
-            else (losses * sample_weights).sum() / sample_weights.sum()
-            for losses in per_level
+            (
+                losses.mean()
+                if sample_weights is None and token_weights is None
+                else (losses * sample_weights).sum() / sample_weights.sum()
+                if sample_weights is not None
+                else (losses * token_weights[:, level]).mean()
+            )
+            for level, losses in enumerate(per_level)
         )
         if level_weights is None:
             weights = target_sids.new_ones(len(level_losses), dtype=torch.float32)

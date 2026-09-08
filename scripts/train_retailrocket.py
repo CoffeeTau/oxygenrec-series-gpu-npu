@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import argparse
-from collections import defaultdict
+from collections import Counter, defaultdict
 from dataclasses import asdict
 import json
 import math
@@ -42,6 +42,8 @@ IGR_VARIANTS = frozenset({
 Q2I_VARIANTS = frozenset({
     "q2i", "igr_q2i", "igr_generic_q2i", "igr_text_q2i", "igr_qwen_q2i",
 })
+V2_BEHAVIOR_VARIANTS = frozenset({"v2_behavior"})
+V2_BEHAVIOR_WEIGHTS = (1.2, 1.5, 2.0)  # view/click代理、cart、order
 
 
 def parse_args() -> argparse.Namespace:
@@ -63,7 +65,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--long-history", type=int, default=100)
     parser.add_argument("--igr-top-k", type=int, default=10)
     parser.add_argument(
-        "--variant", choices=("base", "behavior", "behavior_strength_decay", "instruction", "q2i", "igr", "igr_q2i", "igr_generic_q2i", "igr_text_q2i", "igr_qwen_q2i"),
+        "--variant", choices=("base", "behavior", "behavior_strength_decay", "instruction", "q2i", "igr", "igr_q2i", "igr_generic_q2i", "igr_text_q2i", "igr_qwen_q2i", "v2_behavior"),
         default="base",
     )
     parser.add_argument(
@@ -165,6 +167,21 @@ def tensor_batch(samples, registry, args, device, instruction_cache=None):
         "history_padding_mask": torch.tensor(batch.history_padding_mask, dtype=torch.bool, device=device),
         "target_sids": torch.tensor(batch.target_sids, dtype=torch.long, device=device),
     }
+    if args.variant in V2_BEHAVIOR_VARIANTS:
+        target_behavior_ids = torch.tensor(
+            batch.target_behavior_ids, dtype=torch.long, device=device
+        )
+        behavior_weights = torch.tensor(
+            V2_BEHAVIOR_WEIGHTS, dtype=torch.float32, device=device
+        )
+        result["history_behavior_ids"] = torch.tensor(
+            batch.history_behavior_ids, dtype=torch.long, device=device,
+        )
+        result["behavior_instruction_ids"] = target_behavior_ids
+        # 一个目标商品的三层SID token继承同一个行为价值权重。
+        result["token_weights"] = behavior_weights[target_behavior_ids].unsqueeze(1).expand(
+            -1, registry.levels
+        )
     if args.variant in {"behavior", "behavior_strength_decay"}:
         result["history_behavior_ids"] = torch.tensor(
             batch.history_behavior_ids, dtype=torch.long, device=device,
@@ -209,6 +226,7 @@ def validate(model, samples, registry, trie, args, device, instruction_cache=Non
         )
         target_sids = batch.pop("target_sids")
         batch.pop("sample_weights", None)
+        batch.pop("token_weights", None)
         if args.variant in IGR_VARIANTS:
             # teacher-forcing forward 用于读取 IGR 索引和 Q2I alignment 诊断。
             diagnostic = model(target_sids=target_sids, **batch)
@@ -352,7 +370,9 @@ def main() -> int:
         raise RuntimeError("bounded experiment produced an empty train or validation split")
     print(
         f"stage=samples variant={args.variant} matched_cohort={matched_cohort} "
-        f"train={len(train_samples)} validation={len(validation_samples)}"
+        f"train={len(train_samples)} validation={len(validation_samples)} "
+        f"train_behaviors={dict(sorted(Counter(sample.target.behavior.value for sample in train_samples).items()))} "
+        f"behavior_weights={V2_BEHAVIOR_WEIGHTS if args.variant in V2_BEHAVIOR_VARIANTS else None}"
     )
 
     instruction_cache = None
@@ -413,7 +433,13 @@ def main() -> int:
         max_history_items=args.max_history,
         scenario_vocab_size=3 if args.variant in {"instruction", "q2i", "igr", "igr_q2i"} else 1,
         instruction_feature_size=instruction_feature_size,
-        behavior_vocab_size=3 if args.variant in {"behavior", "behavior_strength_decay"} else 0,
+        behavior_vocab_size=(
+            3
+            if args.variant in {"behavior", "behavior_strength_decay"}
+            or args.variant in V2_BEHAVIOR_VARIANTS
+            else 0
+        ),
+        behavior_instruction_vocab_size=3 if args.variant in V2_BEHAVIOR_VARIANTS else 0,
         behavior_time_decay=0.05 if args.variant == "behavior_strength_decay" else 0.0,
         igr_top_k=args.igr_top_k if uses_igr else 0,
         q2i_weight=args.q2i_weight if args.variant in Q2I_VARIANTS else 0.0,
@@ -482,6 +508,8 @@ def main() -> int:
         total_ntp_loss = 0.0
         total_q2i_loss = 0.0
         max_loss_identity_error = 0.0
+        max_behavior_adapter_grad = 0.0
+        max_reserved_token_grad = 0.0
         batches = 0
         for sample_batch in chunks(train_samples, args.batch_size):
             batch = tensor_batch(
@@ -504,6 +532,21 @@ def main() -> int:
                     f"weight={config.q2i_weight}"
                 )
             output.loss.backward()
+            if args.variant in V2_BEHAVIOR_VARIANTS:
+                max_behavior_adapter_grad = max(
+                    max_behavior_adapter_grad,
+                    sum(
+                        float(parameter.grad.abs().sum())
+                        for parameter in model.behavior_instruction_adapter.parameters()
+                        if parameter.grad is not None
+                    ),
+                )
+                embedding_grad = model.sid_embeddings[0].weight.grad
+                if embedding_grad is not None:
+                    max_reserved_token_grad = max(
+                        max_reserved_token_grad,
+                        float(embedding_grad[registry.width :].abs().sum()),
+                    )
             optimizer.step()
             total_loss += float(output.loss.detach())
             total_ntp_loss += float(output.ntp_loss.detach())
@@ -556,7 +599,9 @@ def main() -> int:
             f"repeat_lift={retrieval['repeat_lift_over_random']} "
             f"q2i_alignment={retrieval['q2i_alignment']} "
             f"repeat_eligible={retrieval['repeat_eligible']} "
-            f"behavior_metrics={json.dumps(retrieval['behavior_metrics'], sort_keys=True)}"
+            f"behavior_metrics={json.dumps(retrieval['behavior_metrics'], sort_keys=True)} "
+            f"ib_adapter_grad={max_behavior_adapter_grad:.6f} "
+            f"reserved_token_grad={max_reserved_token_grad:.6f}"
         )
         epoch_records.append({
             "variant": args.variant,

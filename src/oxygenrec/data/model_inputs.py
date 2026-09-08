@@ -16,6 +16,7 @@ class SIDModelBatch:
     history_padding_mask: tuple[tuple[bool, ...], ...]
     history_behavior_ids: tuple[tuple[int, ...], ...]
     target_sids: tuple[tuple[int, ...], ...]
+    target_behavior_ids: tuple[int, ...]
 
 
 @dataclass(frozen=True)
@@ -29,6 +30,7 @@ class LongShortSIDModelBatch:
     long_history_padding_mask: tuple[tuple[bool, ...], ...]
     long_history_behavior_ids: tuple[tuple[int, ...], ...]
     target_sids: tuple[tuple[int, ...], ...]
+    target_behavior_ids: tuple[int, ...]
     scenario_ids: tuple[int, ...]
 
 
@@ -52,6 +54,8 @@ def build_sid_model_batch(
     histories: list[tuple[tuple[int, ...], ...]] = []
     history_behaviors: list[tuple[int, ...]] = []
     targets: list[tuple[int, ...]] = []
+    target_behaviors: list[int] = []
+    # RetailRocket没有曝光日志；view在本项目中作为论文click行为的公开代理。
     behavior_id = {"view": 0, "addtocart": 1, "transaction": 2}
     for sample in samples:
         if sample.target.item_id not in registry.item_to_sid:
@@ -72,6 +76,7 @@ def build_sid_model_batch(
         histories.append(tuple(known_history))
         history_behaviors.append(tuple(behavior_id[event.behavior.value] for event in known_events))
         targets.append(registry.sid_for(sample.target.item_id).codes)
+        target_behaviors.append(behavior_id[sample.target.behavior.value])
 
     padded_history: list[tuple[tuple[int, ...], ...]] = []
     padding_masks: list[tuple[bool, ...]] = []
@@ -88,6 +93,7 @@ def build_sid_model_batch(
         history_padding_mask=tuple(padding_masks),
         history_behavior_ids=tuple(padded_behaviors),
         target_sids=tuple(targets),
+        target_behavior_ids=tuple(target_behaviors),
     )
 
 
@@ -121,6 +127,7 @@ def build_long_short_sid_model_batch(
     long_masks = []
     long_behaviors = []
     targets = []
+    target_behaviors = []
     scenarios = []
     scenario_by_behavior = {"view": 0, "addtocart": 1, "transaction": 2}
     for sample in samples:
@@ -155,7 +162,9 @@ def build_long_short_sid_model_batch(
         long_masks.append((True,) * long_pad + (False,) * len(long))
         long_behaviors.append((0,) * long_pad + tuple(long_behavior))
         targets.append(registry.sid_for(sample.target.item_id).codes)
-        scenarios.append(scenario_by_behavior[sample.target.behavior.value])
+        target_behavior = scenario_by_behavior[sample.target.behavior.value]
+        target_behaviors.append(target_behavior)
+        scenarios.append(target_behavior)
     return LongShortSIDModelBatch(
         short_history_sids=tuple(short_rows),
         short_history_padding_mask=tuple(short_masks),
@@ -164,5 +173,6 @@ def build_long_short_sid_model_batch(
         long_history_padding_mask=tuple(long_masks),
         long_history_behavior_ids=tuple(long_behaviors),
         target_sids=tuple(targets),
+        target_behavior_ids=tuple(target_behaviors),
         scenario_ids=tuple(scenarios),
     )
