@@ -53,6 +53,8 @@ class OxygenRECConfig:
     max_history_items: int = 256
     # v1默认为单目标；v2列表式训练按N个商品预留3N个SID解码位置。
     max_target_items: int = 1
+    # EA-TOSD Teacher最多额外读取M个未来商品；0保持既有v1/v2预训练checkpoint形状。
+    max_future_items: int = 0
 
     def __post_init__(self) -> None:
         positive = {
@@ -81,9 +83,11 @@ class OxygenRECConfig:
             or self.behavior_vocab_size < 0
             or self.behavior_instruction_vocab_size < 0
             or self.igr_top_k < 0
+            or self.max_future_items < 0
         ):
             raise ValueError(
-                "instruction_feature_size, behavior vocabularies and igr_top_k "
+                "instruction_feature_size, behavior vocabularies, igr_top_k and "
+                "max_future_items "
                 "cannot be negative"
             )
         if self.behavior_time_decay < 0:
@@ -177,8 +181,9 @@ class OxygenRECModel(nn.Module):
         )
         self.bos_embedding = nn.Parameter(torch.empty(config.hidden_size))
         self.decoder_positions = nn.Embedding(
-            # 长度=P+3N-1；v1前缀P=3，v2带I_b时P=4。
+            # 长度=P+3M+3N-1；M=0时保持旧checkpoint的位置表形状。
             config.sid_levels * config.max_target_items
+            + config.sid_levels * config.max_future_items
             + 2
             + int(config.behavior_instruction_vocab_size > 0),
             config.hidden_size,
@@ -232,6 +237,8 @@ class OxygenRECModel(nn.Module):
         instruction_ids: Tensor | None = None,
         scenario_ids: Tensor | None = None,
         behavior_instruction_ids: Tensor | None = None,
+        privileged_future_sids: Tensor | None = None,
+        privileged_future_padding_mask: Tensor | None = None,
         instruction_features: Tensor | None = None,
         trigger_sids: Tensor | None = None,
         long_history_sids: Tensor | None = None,
@@ -247,6 +254,9 @@ class OxygenRECModel(nn.Module):
         ``history_sids``=[B,T,L]，``history_padding_mask``=[B,T]，其中 True
         表示 padding。v1训练传入 ``target_sids``=[B,L]；v2列表式训练传入
         ``target_sids``=[B,N,L]，内部展平为3N个teacher-forcing token。
+        EA-TOSD Teacher还可传``privileged_future_sids``=[B,M,L]与对应的
+        ``privileged_future_padding_mask``=[B,M]；它只用于训练期teacher forcing，
+        不进入部署时的``generate()``。
         不传target时生成``output_items``个商品。
 
         符号约定：B 为 batch size，T 为序列长度，H 为隐藏维度，
@@ -256,6 +266,16 @@ class OxygenRECModel(nn.Module):
         """
 
         self._validate_inputs(history_sids, history_padding_mask, target_sids)
+        future_codes, future_token_mask = self._prepare_privileged_future(
+            privileged_future_sids,
+            privileged_future_padding_mask,
+            batch_size=history_sids.shape[0],
+            device=history_sids.device,
+        )
+        if future_codes is not None and target_sids is None:
+            raise ValueError("privileged future prefix requires target_sids")
+        if future_codes is not None and self.config.behavior_instruction_vocab_size == 0:
+            raise ValueError("EA-TOSD privileged teacher requires v2 behavior instruction")
         if not 1 <= output_items <= self.config.max_target_items:
             raise ValueError("output_items must be within configured max_target_items")
         batch_size = history_sids.shape[0]
@@ -300,8 +320,12 @@ class OxygenRECModel(nn.Module):
         hidden = self._decode(
             memory, encoder_mask, scenario_prompt, reasoning_prompt,
             behavior_prompt, prefix,
+            privileged_future_codes=future_codes,
+            privileged_future_token_mask=future_token_mask,
         )
-        prediction_offset = 3 if behavior_prompt is not None else 2
+        prediction_offset = (3 if behavior_prompt is not None else 2) + (
+            0 if future_codes is None else future_codes.shape[1]
+        )
         logits = tuple(
             self.prediction_heads[step % self.config.sid_levels](
                 hidden[:, step + prediction_offset, :]
@@ -402,6 +426,55 @@ class OxygenRECModel(nn.Module):
         if target_sids.ndim == 2:
             return target_sids
         return target_sids.reshape(target_sids.shape[0], -1)
+
+    def _prepare_privileged_future(
+        self,
+        future_sids: Tensor | None,
+        future_padding_mask: Tensor | None,
+        *,
+        batch_size: int,
+        device: torch.device,
+    ) -> tuple[Tensor | None, Tensor | None]:
+        """校验Teacher未来商品并展平为固定的SID token块``[B,3M]``。
+
+        ``future_padding_mask=True``表示整个未来商品是padding。显式mask避免把
+        合法SID code 0误当成padding；被mask商品仍占固定位置但不会被后续token注意。
+        """
+        if future_sids is None:
+            if future_padding_mask is not None:
+                raise ValueError(
+                    "privileged_future_padding_mask requires privileged_future_sids"
+                )
+            return None, None
+        if self.config.max_future_items == 0:
+            raise ValueError("max_future_items must be configured for EA-TOSD teacher")
+        if (
+            future_sids.ndim != 3
+            or future_sids.shape[0] != batch_size
+            or future_sids.shape[2] != self.config.sid_levels
+            or not 1 <= future_sids.shape[1] <= self.config.max_future_items
+            or future_sids.dtype != torch.long
+        ):
+            raise ValueError(
+                "privileged_future_sids must be torch.long [batch, future_items, levels] "
+                "within max_future_items"
+            )
+        if (
+            future_padding_mask is None
+            or future_padding_mask.shape != future_sids.shape[:2]
+            or future_padding_mask.dtype != torch.bool
+        ):
+            raise ValueError(
+                "privileged_future_padding_mask must be boolean [batch, future_items]"
+            )
+        if (future_sids < 0).any() or (future_sids >= self.config.sid_width).any():
+            raise ValueError("privileged_future_sids contains a code outside the SID vocabulary")
+        future_sids = future_sids.to(device)
+        future_padding_mask = future_padding_mask.to(device)
+        return (
+            future_sids.reshape(batch_size, -1),
+            future_padding_mask.repeat_interleave(self.config.sid_levels, dim=1),
+        )
 
     @staticmethod
     def _default_ids(ids: Tensor | None, batch_size: int, device: torch.device) -> Tensor:
@@ -565,8 +638,11 @@ class OxygenRECModel(nn.Module):
         reasoning_prompt: Tensor,
         behavior_prompt: Tensor | None,
         prefix_codes: Tensor | None,
+        *,
+        privileged_future_codes: Tensor | None = None,
+        privileged_future_token_mask: Tensor | None = None,
     ) -> Tensor:
-        """以instruction、BOS和展平SID前缀[B,<=3N-1]执行causal Decoder。"""
+        """执行causal Decoder；EA-TOSD Teacher在I_b后插入训练期未来SID块。"""
         batch_size = memory.shape[0]
         bos = self.bos_embedding.unsqueeze(0).expand(batch_size, -1)
         if behavior_prompt is None:
@@ -575,6 +651,16 @@ class OxygenRECModel(nn.Module):
         else:
             # v2 论文式前缀：[BOS, I_s, I_r, I_b]；I_b 的位置预测首层 SID。
             tokens = [bos, scenario_prompt, reasoning_prompt, behavior_prompt]
+        base_prefix_length = len(tokens)
+        if privileged_future_codes is not None:
+            if privileged_future_token_mask is None:
+                raise ValueError("privileged future codes require a token padding mask")
+            tokens.extend(
+                self.sid_embeddings[step % self.config.sid_levels](
+                    privileged_future_codes[:, step]
+                )
+                for step in range(privileged_future_codes.shape[1])
+            )
         if prefix_codes is not None:
             tokens.extend(
                 self.sid_embeddings[step % self.config.sid_levels](
@@ -591,10 +677,32 @@ class OxygenRECModel(nn.Module):
             ),
             diagonal=1,
         )
+        target_padding_mask = None
+        if privileged_future_token_mask is not None:
+            suffix_length = 0 if prefix_codes is None else prefix_codes.shape[1]
+            target_padding_mask = torch.cat(
+                (
+                    torch.zeros(
+                        batch_size,
+                        base_prefix_length,
+                        dtype=torch.bool,
+                        device=hidden.device,
+                    ),
+                    privileged_future_token_mask,
+                    torch.zeros(
+                        batch_size,
+                        suffix_length,
+                        dtype=torch.bool,
+                        device=hidden.device,
+                    ),
+                ),
+                dim=1,
+            )
         return self.decoder(
             self.dropout(hidden),
             memory,
             tgt_mask=causal_mask,
+            tgt_key_padding_mask=target_padding_mask,
             memory_key_padding_mask=memory_padding_mask,
         )
 
@@ -846,6 +954,128 @@ class OxygenRECModel(nn.Module):
                 selected.append(allowed_tensor[best])
             generated = torch.cat((generated, torch.stack(selected).unsqueeze(1)), dim=1)
         return generated
+
+    @torch.no_grad()
+    def sample_trajectories(
+        self,
+        history_sids: Tensor,
+        history_padding_mask: Tensor,
+        trie: PrefixTrie,
+        *,
+        group_size: int,
+        history_behavior_ids: Tensor | None = None,
+        instruction_ids: Tensor | None = None,
+        scenario_ids: Tensor | None = None,
+        behavior_instruction_ids: Tensor | None = None,
+        instruction_features: Tensor | None = None,
+        trigger_sids: Tensor | None = None,
+        long_history_sids: Tensor | None = None,
+        long_history_padding_mask: Tensor | None = None,
+        long_history_behavior_ids: Tensor | None = None,
+        retrieval_plans: Sequence[ExecutableRetrievalPlan] | None = None,
+        retrieval_mode: RetrievalMode = PAPER_IGR,
+        output_items: int = 1,
+        temperature: float = 1.0,
+        generator: torch.Generator | None = None,
+    ) -> Tensor:
+        """从当前Student按PrefixTrie约束采样G条on-policy轨迹``[B,G,3N]``。
+
+        每条轨迹独立采样，允许重复；论文只要求从当前策略采样候选组，并未规定
+        组内去重。未来信息不会进入本函数，因而不会泄漏到部署Student。
+        """
+        if group_size < 1:
+            raise ValueError("group_size must be positive")
+        if temperature <= 0:
+            raise ValueError("temperature must be positive")
+        self._validate_inputs(history_sids, history_padding_mask, None)
+        if not 1 <= output_items <= self.config.max_target_items:
+            raise ValueError("output_items must be within configured max_target_items")
+
+        batch_size = history_sids.shape[0]
+        instruction_ids = self._default_ids(
+            instruction_ids, batch_size, history_sids.device
+        )
+        scenario_ids = self._default_ids(
+            scenario_ids, batch_size, history_sids.device
+        )
+        history_context = self._history_context(
+            history_sids, history_padding_mask, scenario_ids
+        )
+        scenario_prompt, reasoning_prompt, query = self._instruction_prompt(
+            scenario_ids,
+            instruction_ids,
+            instruction_features,
+            trigger_sids,
+            history_context,
+        )
+        behavior_prompt = self._behavior_instruction_prompt(
+            behavior_instruction_ids, batch_size, history_sids.device
+        )
+        encoder_sids, encoder_mask, _, _ = self._augment_history(
+            history_sids,
+            history_padding_mask,
+            long_history_sids,
+            long_history_padding_mask,
+            query,
+            long_history_behavior_ids=long_history_behavior_ids,
+            retrieval_plans=retrieval_plans,
+            retrieval_mode=retrieval_mode,
+        )
+        if long_history_sids is not None and history_behavior_ids is not None:
+            raise ValueError("behavior-conditioned IGR requires long-history behavior IDs")
+        memory = self._encode(encoder_sids, encoder_mask, history_behavior_ids)
+
+        # 将每个上下文复制G份，只做一次batched采样解码。
+        memory = memory.repeat_interleave(group_size, dim=0)
+        encoder_mask = encoder_mask.repeat_interleave(group_size, dim=0)
+        scenario_prompt = scenario_prompt.repeat_interleave(group_size, dim=0)
+        reasoning_prompt = reasoning_prompt.repeat_interleave(group_size, dim=0)
+        if behavior_prompt is not None:
+            behavior_prompt = behavior_prompt.repeat_interleave(group_size, dim=0)
+        rollout_batch = batch_size * group_size
+        generated = torch.empty(
+            rollout_batch, 0, dtype=torch.long, device=history_sids.device
+        )
+        total_steps = output_items * self.config.sid_levels
+        for step in range(total_steps):
+            level = step % self.config.sid_levels
+            hidden = self._decode(
+                memory,
+                encoder_mask,
+                scenario_prompt,
+                reasoning_prompt,
+                behavior_prompt,
+                generated,
+            )
+            prediction_offset = 3 if behavior_prompt is not None else 2
+            logits = self.prediction_heads[level](
+                hidden[:, step + prediction_offset, :]
+            )
+            selected = []
+            item_start = step - level
+            for row in range(rollout_batch):
+                item_prefix = tuple(
+                    int(code) for code in generated[row, item_start:].tolist()
+                )
+                allowed = trie.allowed_next(item_prefix)
+                if not allowed:
+                    raise ValueError(
+                        f"trie has no legal continuation for prefix {item_prefix}"
+                    )
+                allowed_tensor = torch.tensor(
+                    allowed, dtype=torch.long, device=logits.device
+                )
+                probabilities = F.softmax(
+                    logits[row, allowed_tensor] / temperature, dim=-1
+                )
+                choice = torch.multinomial(
+                    probabilities, 1, generator=generator
+                ).squeeze(0)
+                selected.append(allowed_tensor[choice])
+            generated = torch.cat(
+                (generated, torch.stack(selected).unsqueeze(1)), dim=1
+            )
+        return generated.reshape(batch_size, group_size, total_steps)
 
     @torch.no_grad()
     def beam_search(

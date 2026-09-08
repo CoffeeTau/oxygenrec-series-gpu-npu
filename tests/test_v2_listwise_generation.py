@@ -30,6 +30,7 @@ class V2ListwiseGenerationTest(unittest.TestCase):
                 dropout=0.0,
                 max_history_items=4,
                 max_target_items=2,
+                max_future_items=2,
             )
         )
         self.history = torch.tensor(
@@ -131,6 +132,61 @@ class V2ListwiseGenerationTest(unittest.TestCase):
         )
         self.assertEqual(tuple(scores.shape), (2, 2, 6))
         self.assertTrue(torch.isfinite(scores).all())
+
+    def test_privileged_teacher_prefix_changes_logits_and_masks_padding(self):
+        self.model.eval()
+        future = torch.tensor(
+            [
+                [[7, 8, 9], [1, 2, 3]],
+                [[1, 4, 5], [7, 8, 9]],
+            ],
+            dtype=torch.long,
+        )
+        future_mask = torch.tensor([[False, True], [False, True]])
+        with torch.no_grad():
+            student = self._forward().logits
+            teacher = self.model(
+                self.history,
+                self.padding,
+                target_sids=self.targets,
+                history_behavior_ids=self.history_behaviors,
+                behavior_instruction_ids=self.behavior_instructions,
+                privileged_future_sids=future,
+                privileged_future_padding_mask=future_mask,
+            ).logits
+            changed_padding = future.clone()
+            changed_padding[:, 1] = torch.tensor([[4, 5, 6], [1, 2, 3]])
+            masked_again = self.model(
+                self.history,
+                self.padding,
+                target_sids=self.targets,
+                history_behavior_ids=self.history_behaviors,
+                behavior_instruction_ids=self.behavior_instructions,
+                privileged_future_sids=changed_padding,
+                privileged_future_padding_mask=future_mask,
+            ).logits
+        self.assertTrue(
+            any(not torch.equal(left, right) for left, right in zip(student, teacher))
+        )
+        for left, right in zip(teacher, masked_again):
+            torch.testing.assert_close(left, right)
+
+    def test_on_policy_group_sampling_returns_legal_lists(self):
+        self.model.eval()
+        sampled = self.model.sample_trajectories(
+            self.history,
+            self.padding,
+            self.trie,
+            group_size=4,
+            history_behavior_ids=self.history_behaviors,
+            behavior_instruction_ids=self.behavior_instructions,
+            output_items=2,
+            temperature=0.8,
+        )
+        self.assertEqual(tuple(sampled.shape), (2, 4, 6))
+        for row in sampled.reshape(-1, 6).tolist():
+            self.assertTrue(self.trie.contains(row[:3]))
+            self.assertTrue(self.trie.contains(row[3:]))
 
     def test_rejects_more_items_than_configured(self):
         too_many = torch.zeros(2, 3, 3, dtype=torch.long)
