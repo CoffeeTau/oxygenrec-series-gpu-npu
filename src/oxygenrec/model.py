@@ -1,4 +1,4 @@
-"""包含 instruction、Q2I 和 IGR 的小型 Dense OxygenREC 主干。
+"""包含v1 instruction/Q2I/IGR与v2行为指令的Dense OxygenREC主干。
 
 模型只消费已 token 化的商品 Semantic ID。数据层必须使用带版本的
 ``SIDRegistry`` 完成 item→SID 映射，避免 checkpoint 静默换用不同 codebook。
@@ -34,6 +34,8 @@ class OxygenRECConfig:
     scenario_vocab_size: int = 1
     instruction_feature_size: int = 0
     behavior_vocab_size: int = 0
+    # v2 的目标行为指令词表；0 表示保持 v1 路径，不创建 Decoder 侧 I_b。
+    behavior_instruction_vocab_size: int = 0
     behavior_time_decay: float = 0.0
     use_history_context_instruction: bool = False
     history_context_pooling: str = "mean"
@@ -71,8 +73,16 @@ class OxygenRECConfig:
             raise ValueError("hidden_size must be divisible by attention_heads")
         if not 0.0 <= self.dropout < 1.0:
             raise ValueError("dropout must be in [0, 1)")
-        if self.instruction_feature_size < 0 or self.behavior_vocab_size < 0 or self.igr_top_k < 0:
-            raise ValueError("instruction_feature_size, behavior_vocab_size and igr_top_k cannot be negative")
+        if (
+            self.instruction_feature_size < 0
+            or self.behavior_vocab_size < 0
+            or self.behavior_instruction_vocab_size < 0
+            or self.igr_top_k < 0
+        ):
+            raise ValueError(
+                "instruction_feature_size, behavior vocabularies and igr_top_k "
+                "cannot be negative"
+            )
         if self.behavior_time_decay < 0:
             raise ValueError("behavior_time_decay cannot be negative")
         for name in ("q2i_weight", "q2i_variance_weight", "q2i_decorrelation_weight"):
@@ -109,13 +119,19 @@ class OxygenRECModel(nn.Module):
     """小型 Transformer Encoder-Decoder；每一层 SID 有独立预测头。"""
 
     def __init__(self, config: OxygenRECConfig) -> None:
-        """创建 SID embedding、instruction/Q2I/IGR 适配器和 Encoder-Decoder。"""
+        """创建 SID、v1/v2 instruction、Q2I/IGR 与 Encoder-Decoder。"""
         super().__init__()
         self.config = config
         # 三层 SID 各有独立 embedding；一个商品向量由三层 embedding 相加得到。
         self.sid_embeddings = nn.ModuleList(
-            nn.Embedding(config.sid_width, config.hidden_size)
-            for _ in range(config.sid_levels)  # _表示循环变量的具体值不会被使用，只关心循环次数
+            nn.Embedding(
+                # v2 按论文把 click/cart/order 放到 SID 词表上方的保留 token。
+                config.sid_width + (
+                    config.behavior_instruction_vocab_size if level == 0 else 0
+                ),
+                config.hidden_size,
+            )
+            for level in range(config.sid_levels)
         )
         self.history_positions = nn.Embedding(
             config.max_history_items + config.igr_top_k, config.hidden_size
@@ -127,6 +143,15 @@ class OxygenRECModel(nn.Module):
         self.behavior_embeddings = (
             nn.Embedding(config.behavior_vocab_size, config.hidden_size)
             if config.behavior_vocab_size else None
+        )
+        self.behavior_instruction_adapter = (
+            nn.Sequential(
+                nn.Linear(config.hidden_size, config.feedforward_size),
+                nn.LeakyReLU(negative_slope=0.01),
+                nn.Dropout(config.dropout),
+                nn.Linear(config.feedforward_size, config.hidden_size),
+            )
+            if config.behavior_instruction_vocab_size else None
         )
         self.instruction_feature_adapter = (
             nn.Linear(config.instruction_feature_size, config.hidden_size)
@@ -149,7 +174,9 @@ class OxygenRECModel(nn.Module):
         )
         self.bos_embedding = nn.Parameter(torch.empty(config.hidden_size))
         self.decoder_positions = nn.Embedding(
-            config.sid_levels + 2, config.hidden_size
+            # v1 需要 3 个前缀位置中的最后一个来预测首层 SID；v2 多一个 I_b。
+            config.sid_levels + 2 + int(config.behavior_instruction_vocab_size > 0),
+            config.hidden_size,
         )
 
         encoder_layer = nn.TransformerEncoderLayer(
@@ -198,6 +225,7 @@ class OxygenRECModel(nn.Module):
         sample_weights: Tensor | None = None,
         instruction_ids: Tensor | None = None,
         scenario_ids: Tensor | None = None,
+        behavior_instruction_ids: Tensor | None = None,
         instruction_features: Tensor | None = None,
         trigger_sids: Tensor | None = None,
         long_history_sids: Tensor | None = None,
@@ -214,7 +242,9 @@ class OxygenRECModel(nn.Module):
         不传 target 时，上一层 argmax 会作为下一层前缀。
 
         符号约定：B 为 batch size，T 为序列长度，H 为隐藏维度，
-        V 为词表大小，L 为 SID 层数。
+        V 为词表大小，L 为 SID 层数。``behavior_instruction_ids``=[B]
+        是 v2 的目标行为（公开 RetailRocket 映射为 view/click=0、cart=1、order=2），
+        与 Encoder 侧逐历史事件的 ``history_behavior_ids``=[B,T] 不同。
         """
 
         self._validate_inputs(history_sids, history_padding_mask, target_sids)
@@ -228,6 +258,9 @@ class OxygenRECModel(nn.Module):
         scenario_prompt, reasoning_prompt, query = self._instruction_prompt(
             scenario_ids, instruction_ids, instruction_features, trigger_sids,
             history_context,
+        )
+        behavior_prompt = self._behavior_instruction_prompt(
+            behavior_instruction_ids, batch_size, history_sids.device
         )
         # 2) IGR 从长历史选 K 个 SID，拼到短历史后形成 Encoder 输入。
         encoder_sids, encoder_mask, igr_indices, igr_scores = self._augment_history(
@@ -243,14 +276,18 @@ class OxygenRECModel(nn.Module):
         memory = self._encode(encoder_sids, encoder_mask, history_behavior_ids)
         if target_sids is None:
             logits = self._autoregressive_logits(
-                memory, encoder_mask, scenario_prompt, reasoning_prompt
+                memory, encoder_mask, scenario_prompt, reasoning_prompt, behavior_prompt
             )
             return OxygenRECOutput(logits=logits, igr_indices=igr_indices, igr_scores=igr_scores)
         # 4) teacher forcing：用真实 SID 前两层作为 Decoder 的已知前缀。
         prefix = target_sids[:, :-1]
-        hidden = self._decode(memory, encoder_mask, scenario_prompt, reasoning_prompt, prefix)
+        hidden = self._decode(
+            memory, encoder_mask, scenario_prompt, reasoning_prompt,
+            behavior_prompt, prefix,
+        )
+        prediction_offset = 3 if behavior_prompt is not None else 2
         logits = tuple(
-            head(hidden[:, level + 2, :])
+            head(hidden[:, level + prediction_offset, :])
             for level, head in enumerate(self.prediction_heads)
         )
         ntp_loss, level_losses = self.weighted_ntp_loss(
@@ -277,6 +314,7 @@ class OxygenRECModel(nn.Module):
         memory_padding_mask: Tensor,
         scenario_prompt: Tensor,
         reasoning_prompt: Tensor,
+        behavior_prompt: Tensor | None,
     ) -> tuple[Tensor, ...]:
         """无 target 时按 level 0→1→2 贪心产生三组 logits。"""
         prefix = torch.empty(
@@ -285,9 +323,11 @@ class OxygenRECModel(nn.Module):
         outputs = []
         for level, head in enumerate(self.prediction_heads):
             hidden = self._decode(
-                memory, memory_padding_mask, scenario_prompt, reasoning_prompt, prefix
+                memory, memory_padding_mask, scenario_prompt, reasoning_prompt,
+                behavior_prompt, prefix,
             )
-            logits = head(hidden[:, level + 2, :])
+            prediction_offset = 3 if behavior_prompt is not None else 2
+            logits = head(hidden[:, level + prediction_offset, :])
             outputs.append(logits)
             prefix = torch.cat((prefix, logits.argmax(dim=-1, keepdim=True)), dim=1)
         return tuple(outputs)
@@ -363,6 +403,47 @@ class OxygenRECModel(nn.Module):
         # query=[B,Q] 会同时用于长历史 IGR 相似度和目标商品 Q2I 对齐。
         query = F.normalize(self.query_adapter(torch.cat((scenario, reasoning), dim=-1)), dim=-1)
         return scenario, reasoning, query
+
+    def _behavior_instruction_prompt(
+        self,
+        behavior_instruction_ids: Tensor | None,
+        batch_size: int,
+        device: torch.device,
+    ) -> Tensor | None:
+        """把目标行为 ID 映射为 v2 Decoder 前缀中的行为指令 ``I_b``。
+
+        行为 token 使用第一层 Decoder/SID embedding 表中位于 ``V`` 之后的
+        保留行，再经论文规定的两层 LeakyReLU 投影 ``psi`` 得到 [B,H]。
+        这与 ``_encode()`` 中描述历史每一步行为的 embedding 完全分离。
+        """
+        configured = self.config.behavior_instruction_vocab_size
+        if configured == 0:
+            if behavior_instruction_ids is not None:
+                raise ValueError(
+                    "behavior_instruction_vocab_size must be configured for v2 I_b"
+                )
+            return None
+        if behavior_instruction_ids is None:
+            raise ValueError(
+                "behavior_instruction_ids are required when v2 I_b is configured"
+            )
+        if (
+            behavior_instruction_ids.shape != (batch_size,)
+            or behavior_instruction_ids.dtype != torch.long
+        ):
+            raise ValueError(
+                "behavior_instruction_ids must be torch.long with shape [batch]"
+            )
+        if (
+            (behavior_instruction_ids < 0).any()
+            or (behavior_instruction_ids >= configured).any()
+        ):
+            raise ValueError("behavior_instruction_ids contain an unknown behavior")
+        if self.behavior_instruction_adapter is None:  # pragma: no cover - 构造期保证
+            raise RuntimeError("behavior instruction adapter was not initialized")
+        reserved_token_ids = behavior_instruction_ids.to(device) + self.config.sid_width
+        behavior_embedding = self.sid_embeddings[0](reserved_token_ids)
+        return self.behavior_instruction_adapter(behavior_embedding)
 
     def _history_context(
         self, history_sids: Tensor, padding_mask: Tensor, scenario_ids: Tensor
@@ -448,13 +529,18 @@ class OxygenRECModel(nn.Module):
         memory_padding_mask: Tensor,
         scenario_prompt: Tensor,
         reasoning_prompt: Tensor,
+        behavior_prompt: Tensor | None,
         prefix_codes: Tensor | None,
     ) -> Tensor:
-        """以两个 prompt token、BOS 和 SID 前缀为输入执行 causal Decoder。"""
+        """以 instruction、BOS 和 SID 前缀为输入执行 causal Decoder。"""
         batch_size = memory.shape[0]
-        # Decoder 序列布局：[scenario, reasoning, BOS, sid_level_0, sid_level_1]。
-        tokens = [scenario_prompt, reasoning_prompt]
-        tokens.append(self.bos_embedding.unsqueeze(0).expand(batch_size, -1))
+        bos = self.bos_embedding.unsqueeze(0).expand(batch_size, -1)
+        if behavior_prompt is None:
+            # 保留冻结 v1 checkpoint 的既有布局和位置语义。
+            tokens = [scenario_prompt, reasoning_prompt, bos]
+        else:
+            # v2 论文式前缀：[BOS, I_s, I_r, I_b]；I_b 的位置预测首层 SID。
+            tokens = [bos, scenario_prompt, reasoning_prompt, behavior_prompt]
         if prefix_codes is not None:
             tokens.extend(
                 self.sid_embeddings[level](prefix_codes[:, level])
@@ -546,6 +632,7 @@ class OxygenRECModel(nn.Module):
         history_behavior_ids: Tensor | None = None,
         instruction_ids: Tensor | None = None,
         scenario_ids: Tensor | None = None,
+        behavior_instruction_ids: Tensor | None = None,
         instruction_features: Tensor | None = None,
         trigger_sids: Tensor | None = None,
         long_history_sids: Tensor | None = None,
@@ -589,6 +676,7 @@ class OxygenRECModel(nn.Module):
             history_behavior_ids=expand_features(history_behavior_ids),
             instruction_ids=expand_vector(instruction_ids),
             scenario_ids=expand_vector(scenario_ids),
+            behavior_instruction_ids=expand_vector(behavior_instruction_ids),
             instruction_features=expand_features(instruction_features),
             trigger_sids=expand_features(trigger_sids),
             long_history_sids=expand_features(long_history_sids),
@@ -616,6 +704,7 @@ class OxygenRECModel(nn.Module):
         history_behavior_ids: Tensor | None = None,
         instruction_ids: Tensor | None = None,
         scenario_ids: Tensor | None = None,
+        behavior_instruction_ids: Tensor | None = None,
         instruction_features: Tensor | None = None,
         trigger_sids: Tensor | None = None,
         long_history_sids: Tensor | None = None,
@@ -637,6 +726,9 @@ class OxygenRECModel(nn.Module):
             scenario_ids, instruction_ids, instruction_features, trigger_sids,
             history_context,
         )
+        behavior_prompt = self._behavior_instruction_prompt(
+            behavior_instruction_ids, batch_size, history_sids.device
+        )
         encoder_sids, encoder_mask, _, _ = self._augment_history(
             history_sids, history_padding_mask, long_history_sids,
             long_history_padding_mask, query,
@@ -652,9 +744,13 @@ class OxygenRECModel(nn.Module):
         )
         for level in range(self.config.sid_levels):
             hidden = self._decode(
-                memory, encoder_mask, scenario_prompt, reasoning_prompt, generated
+                memory, encoder_mask, scenario_prompt, reasoning_prompt,
+                behavior_prompt, generated,
             )
-            logits = self.prediction_heads[level](hidden[:, level + 2, :])
+            prediction_offset = 3 if behavior_prompt is not None else 2
+            logits = self.prediction_heads[level](
+                hidden[:, level + prediction_offset, :]
+            )
             selected = []
             for row in range(batch_size):
                 prefix = tuple(int(code) for code in generated[row].tolist())
@@ -681,6 +777,7 @@ class OxygenRECModel(nn.Module):
         history_behavior_ids: Tensor | None = None,
         instruction_ids: Tensor | None = None,
         scenario_ids: Tensor | None = None,
+        behavior_instruction_ids: Tensor | None = None,
         instruction_features: Tensor | None = None,
         trigger_sids: Tensor | None = None,
         long_history_sids: Tensor | None = None,
@@ -703,6 +800,9 @@ class OxygenRECModel(nn.Module):
         scenario_prompt, reasoning_prompt, query = self._instruction_prompt(
             scenario_ids, instruction_ids, instruction_features, trigger_sids,
             history_context,
+        )
+        behavior_prompt = self._behavior_instruction_prompt(
+            behavior_instruction_ids, batch_size, history_sids.device
         )
         encoder_sids, encoder_mask, _, _ = self._augment_history(
             history_sids, history_padding_mask, long_history_sids,
@@ -729,9 +829,13 @@ class OxygenRECModel(nn.Module):
                         encoder_mask[row : row + 1],
                         scenario_prompt[row : row + 1],
                         reasoning_prompt[row : row + 1],
+                        behavior_prompt[row : row + 1] if behavior_prompt is not None else None,
                         prefix_tensor,
                     )
-                    logits = self.prediction_heads[level](hidden[:, level + 2, :])
+                    prediction_offset = 3 if behavior_prompt is not None else 2
+                    logits = self.prediction_heads[level](
+                        hidden[:, level + prediction_offset, :]
+                    )
                     log_probabilities = F.log_softmax(logits[0], dim=-1)
                     allowed = trie.allowed_next(prefix)
                     if not allowed:

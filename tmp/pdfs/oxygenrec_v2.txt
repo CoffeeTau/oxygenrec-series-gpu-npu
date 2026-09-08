@@ -1,0 +1,2153 @@
+--- PAGE 1 ---
+OxygenREC-v2: Internalizing Discrimination into Generative
+Recommendation
+Guo Tang∗, Hanye Wu∗, Changjiang Han∗, Qingyang Li, Ming Zhang†, Xiangyu Qian, Yanchen
+Qiao, Huanjie Wang, Zhi Ma, Zhen Li, Yaqiang Zang†, Pinghua Gong†
+JD.COM, Beijing, China
+{tangguo.26, wuhanye.1, hanchangjiang.rand, liqingyang.alex, zhangming229, qianxiangyu3, qiaoyanchen1,
+wanghuanjie.cielo, mazhi6, lizhen444, zangyaqiang.1, gongpinghua1}@jd.com
+Abstract
+Generative recommendation unifies retrieval and ranking within
+a single model by autoregressively decoding semantic identifier
+(SID) sequences. Yet reliably incorporating behavior signals from
+clicks, cart additions, and orders remains challenging. Existing
+approaches either jointly optimize generative and discriminative
+objectives, requiring delicate trade-offs, or use a separate ranker as a
+post-hoc reinforcement-learning reward, risking out-of-distribution
+scoring and reward misalignment. We propose OxygenREC-v2,
+a generative recommender that Internalizes Discrimination into
+Generative Recommendation (IDGR). Rather than adding a sepa-
+rate discriminative objective, OxygenREC-v2 uses logged behav-
+ior to condition generation and supervise training. During pre-
+training, a behavior instruction conditions generation on the tar-
+get behavior. During post-training, future interaction behaviors
+are exploited as privileged knowledge in our entropy-aware tra-
+jectory optimization self-distillation framework, enabling reward-
+model-free policy optimization. Throughout both training stages,
+OxygenREC-v2 maintains a single unified backbone. We implement
+OxygenREC-v2 as a 3B-parameter, 1B-activated MoE and deploy
+it on JD.com’s large-scale e-commerce platform. Across multiple
+online A/B tests, OxygenREC-v2 improves user click-through con-
+version rate (UCTCVR) by 1.6–4.4% and GMV by 2.8–6.8% over
+OxygenREC-v1.
+CCS Concepts
+• Information systems →Recommender systems.
+Keywords
+Generative Recommendation, Behavior Modeling, Reinforcement
+Learning, Knowledge Distillation
+1
+Introduction
+Generative Recommendation (GR) replaces the cascaded retrieval-
+and-ranking pipeline of industrial recommenders with a single
+generative model that decodes item identifiers directly from a user’s
+context [18, 4]. Unifying the two stages into one decoding process
+removes their objective mismatch, and recent GR systems match
+or surpass strong pipelined recommenders at industrial scale [4,
+25]. Yet these systems use the discriminative feedback from clicks,
+cart-adds, and orders only indirectly. Most inject it after generation,
+through a separately trained ranking model that serves as a proxy
+reward for reinforcement learning [19, 17]; our industrial baseline,
+∗These authors contributed equally to this work.
+†Corresponding authors.
+for instance, fuses format, relative-order, ranking, and diversity
+rewards from such a model [10] (Figure 1 (a)).
+Two problems recur in this design. First, an offline ranking model
+scores out-of-distribution outputs unreliably, so the policy can raise
+its proxy score without improving recommendation quality, a form
+of reward hacking [6, 21]. Second, the competing reward terms
+pull in different directions, and balancing their weights becomes its
+own tuning problem. Both problems share one cause: during pre-
+training the generator never sees the behavior it should promote.
+A click target and an order target carry the same instruction, so
+the model returns the same candidate distribution for both, and the
+behavior signal can enter only afterward. This raises a question:
+How can the discriminative behavior signal be internalized
+directly into the generative model’s training objective, rather
+than delegated to a separate external reward model?
+Placing behavior at the output end [16, 22] does not answer it. A
+GR model can append a behavior token after the item identifier or
+predict behavior from the final decoder state, letting generation and
+discrimination share one backbone (Figure 1 (b)). Both still predict
+behavior after generation instead of using it to condition generation,
+so the candidate distribution is identical across target behaviors.
+Reranking reorders the decoded items but cannot change which
+items are generated.
+We instead condition generation on behavior directly. The behav-
+ior hierarchy already in session logs, which orders exposure, click,
+add-to-cart, and order by intent strength, is a supervision signal
+that runs through both training stages without any extra model: a
+behavior label that conditions generation in pre-training is naturally
+preserved as the supervision signal throughout post-training (Fig-
+ure 1 (c)). Making the signal internal rather than external removes
+the source of the proxy-reward problem.
+While behavior-aware pre-training internalizes user behavior
+into generation, enabling behavior-guided policy optimization dur-
+ing post-training without relying on external reward models re-
+mains challenging. Verifiable rewards provide an optimization ob-
+jective without relying on external reward models, but only provide
+sparse supervision for behavior-aware policy optimization. Recent
+On-Policy Distillation (OPD) [15] can provide token-level teacher-
+student distillation signals for behavior-aware policy update, but
+maintaining an external rapid iterative teacher is costly in recom-
+mendation systems [5]. A natural idea is to utilize user’s future
+interactive behaviors as the privileged information for On-Policy
+Self-Distillation (OPSD) [27]. However, directly applying privileged
+self-distillation inevitably introduces privilege-dependent bias.
+We propose OxygenREC-v2, a generative recommender that
+Internalizes Discrimination into Generative Recommendation (IDGR):
+1
+arXiv:2607.24255v1  [cs.IR]  27 Jul 2026
+
+
+--- PAGE 2 ---
+Tang et al.
+��(�|�, ��, ��)
+External Discriminative / 
+Reward Model �� 
+Proxy Scoring 
+(Format / Relevance / Ranking / Diversity)
+Candidates �
+Reward / RL Update
+Generative Recommender (GR)
+Generate SID Sequence �
+（a) GR with External Reward Model
+��(�|�, ��, ��)
+Shared GDM Backbone
+（b) Generative + Discriminative Co-training
+NTP Loss
+��
+��
+��
+[���]
+Discriminative Head
+Clk/Ord Loss
+Encoder
+Decoder
+Cross-Attention
+Decoder Prefix:
+[���]
+��
+��
+Encoder
+Decoder
+Cross-Attention
+Decoder Prefix:
+[���]
+��
+��
+Behavior-Conditioned Generator
+Encoder
+Decoder
+Cross-Attention
+Decoder Prefix:
+[���]
+��
+��
+��(�|�, ��, ��, ��)
+��
+NTP Loss
+��
+��
+��
+Behavior Instruction
+��= �(���(�))
+（c) OxygenREC-v2 (Ours)
+Figure 1: Three paradigms for coupling the behavior signal with a generative recommender. (a) External reward model: a
+behavior-agnostic generator is scored after generation by a separately trained reward model. (b) Generative–discriminative
+co-training: a shared generative–discriminative model (GDM) backbone carries a discriminative head that predicts behavior at
+the output end, but the candidate distribution stays behavior-agnostic. (c) OxygenREC-v2 (ours): the behavior instruction 𝐼𝑏
+enters the decoder prefix and conditions generation from the first step, internalizing the behavior signal into the generator.
+it folds the behavior signal into the generator’s objective at both
+training stages. In pre-training, a behavior-aware instruction 𝐼𝑏en-
+codes each target’s ground-truth behavior label and enters the
+decoder prefix, conditioning generation from the first decoding
+step so the candidate distribution shifts with the target behavior.
+In post-training, we use a unified Entropy-Aware Trajectory
+Optimization Self-Distillation framework (EA-TOSD). On the basis
+of the behavior-conditioned generator, we further utilize future
+user interaction behavior as teacher privileged knowledge for pref-
+erence alignment, while employing an entropy-aware strategy to
+prevent privileged distillation bias.
+On JD.com’s industrial e-commerce platform, OxygenREC-v2
+improves HR@1 from 4.62% to 5.64% and HR@512 from 43.24%
+to 44.14% over the pre-trained baseline, and leads a proxy-reward
+baseline on six of seven retrieval and ranking metrics, with the
+largest gains on order, the sparsest and highest-value behavior.
+Deployed as a 3B-parameter, 1B-activated (3B-A1B) MoE, it raises
+online User Click-Through Conversion Rate (UCTCVR) by 1.6–4.4%
+and GMV by 2.8–6.8% across multiple scenarios.
+Our contributions are summarized as follows:
+• Behavior-conditioned pre-training. The behavior-aware in-
+struction 𝐼𝑏conditions every decoding step on the target be-
+havior, and behavior-aware training aligns the supervision by
+expanding, filtering, and value-weighting logged targets.
+• Entropy-aware self-distillation post-training framework.
+We propose a unified reward-model-free post-training frame-
+work that directly internalizes user behavioral signals into pol-
+icy optimization by jointly leveraging verifiable trajectory opti-
+mization, a teacher informed by the user’s future behavior, and
+entropy-aware privileged distillation.
+• Industrial validation. On JD.com’s industrial e-commerce plat-
+form, OxygenREC-v2 improves offline retrieval and ranking com-
+pared to the baseline method and raises online UCTCVR and
+GMV in bucketed A/B tests.
+2
+Related Work
+Behavior signals in generative recommendation. Generative re-
+trieval autoregressively decodes item identifiers from interaction
+histories [18, 4]. Classical industrial recommenders model hetero-
+geneous actions such as clicks and conversions with multi-task
+discriminators [16, 22]. Recent generative systems largely retain
+this separation: OneRec uses a learned reward model [28], OneMall
+an online ranker as reward [26], and GenRec a dense preference
+model with a relevance gate [30]. Such proxies densify feedback but
+invite reward overoptimization under policy shift [6, 21]. A com-
+plementary line internalizes behavior: MBGen jointly generates
+behavior and item tokens [14], while PinRec conditions genera-
+tion on desired engagement outcomes [2]. These studies establish
+behavior-conditioned generation; we study its reliable post-training
+without an external behavior scorer.
+Verifiable optimization and privileged on-policy distillation. Rec-
+ommender policies have long learned from logged feedback, in-
+cluding production-scale off-policy reinforce [3]. RL with verifiable
+rewards instead anchors updates to ground truth checks, avoiding
+a learned judge’s proxy error [12, 9]. OneRec-V2 likewise optimizes
+real user feedback, reducing reward-hacking risk but retaining
+sparse positives and difficult multi-objective credit assignment [29].
+Distillation supplies denser supervision. Beyond online behavior
+classifiers, P5 encodes tasks and preferences in prompts [7], PFD
+2
+
+
+--- PAGE 3 ---
+OxygenREC-v2: Internalizing Discrimination into Generative Recommendation
+transfers post-event privileged features [24], and AFE distills future
+interactions and item taxonomy [23]. For Large Language Models
+(LLMs), OPD supervises student rollouts with dense token distri-
+butions [8, 1, 15]; OPSD instead uses the same backbone but with
+privileged inputs [27]. Yet privileged teachers can reinforce un-
+supported reasoning, motivating purification and entropy-based
+selection [20, 11]. We adapt this line to generative recommendation
+by combining verifiable trajectory optimization with entropy-aware
+privileged self-distillation.
+3
+Preliminaries
+Generative Recommendation Setup. We adopt an encoder–decoder
+generative recommender [18, 4]. The encoder maps a user’s in-
+teraction context 𝑋(behavioral sequences, profile features, and
+contextual signals) into a sequence of hidden states. The decoder
+then produces a recommendation autoregressively as a string of
+semantic identifier (SID) tokens. Each item is tokenized into an
+ordered triple (𝑠1,𝑠2,𝑠3) drawn from three hierarchical codebooks
+via residual quantization [13], so decoding one item takes three
+steps. We write a decoded recommendation as a flattened SID-token
+sequence 𝑌= (𝑦1, . . . ,𝑦𝐿), where each 𝑦𝑡is a single SID token and
+𝐿is the number of decoding steps; a single item corresponds to
+𝐿= 3. Following the instruction-following design of the industrial
+system we build on [10], the decoder is conditioned on a composite
+instruction prompt 𝑃= (𝐼𝑠, 𝐼𝑟), where 𝐼𝑠is the scenario instruction
+(encoding scene context and an optional trigger item) and 𝐼𝑟is the
+contextual reasoning instruction, a dense embedding synthesized by
+a nearline large language model [17] from user intent signals. The
+pre-training objective maximizes the likelihood of the target SID
+sequence 𝑌given the user context and instructions:
+𝑝𝜃(𝑌| 𝑋, 𝐼𝑠, 𝐼𝑟).
+(1)
+This setup defines the surface on which our framework operates:
+the instruction prompt is the model’s only input-side handle for
+shaping generation, and the SID sequence is its only output.
+The External Discriminator Pattern. The pre-training objective
+in Eq. (1) reflects what items a user engaged with, but not the type
+of engagement. Discriminative information about behavior is con-
+ventionally injected after pre-training through an external module.
+A separately trained ranking model 𝑅𝜙( ˆ𝑌,𝑋) scores the generated
+candidates ˆ𝑌, and the policy is fine-tuned by reinforcement learning
+against a fusion of proxy reward terms,
+R( ˆ𝑌,𝑋) =
+∑︁
+𝑗
+𝛼𝑗𝑟𝑗( ˆ𝑌,𝑋),
+(2)
+where each 𝑟𝑗targets a different objective (format, ranking, diver-
+sity, relevance) and the weights 𝛼𝑗are set by hand. We refer to this
+two-stage arrangement, in which a pre-trained generator is paired
+with an externally trained discriminator that supplies a proxy re-
+ward, as the external discriminator pattern. It is the dominant recipe
+in industrial GR systems [10] and the baseline against which our
+framework is positioned.
+4
+Methodology
+Building on the generative recommender of Section 3, our method
+adds the behavior signal to the training objective through four
+components. The behavior-aware instruction conditions genera-
+tion on the target behavior, and behavior-aware training reweights
+the supervision toward informative behaviors. Post-training then
+replaces the proxy ranking reward with a verifiable behavior match
+and distills a privileged teacher that looks ahead to the user’s future
+behavior. A single behavior hierarchy, ordered by intent strength
+from exposure through click and add-to-cart to order, runs through
+all four: it sets the instruction priority, the supervised loss weights,
+and the teacher’s behavior threshold. Figure 2 shows how the same
+signal is reused: it conditions the deployed student through 𝐼𝑏,
+grounds the verifiable reward against observed targets, and filters
+the near-future context available only to the privileged teacher.
+4.1
+Behavior-Aware Instruction
+The scene and reasoning instructions specify where recommenda-
+tions are made and to whom, but not the behavior the recommenda-
+tion should drive. The same user on a home feed, where the goal is
+a click, and on the cart page, where the goal is an order, should re-
+ceive different candidates, yet without a behavior signal the model
+reads identical instructions and returns the same distribution. Be-
+havior is the axis along which recommendation objectives differ: a
+click target favors exploration and diversity; an order target favors
+high-conversion items. Expressing that difference only through
+an external model that scores candidates afterward is indirect and
+leaves the generator itself behavior-agnostic.
+Behavior instruction 𝐼𝑏. We encode the target behavior 𝑏, one of
+click, cart, or order, as an instruction 𝐼𝑏and prepend it to the decoder.
+The behavior maps to a reserved token whose embedding is read
+from the decoder’s shared embedding table and passed through a
+two-layer feed-forward projection 𝜓, giving 𝐼𝑏= 𝜓(Emb(𝑏)). We
+concatenate 𝐼𝑏after the scene and reasoning instructions, so the
+decoder prefix becomes [bos, 𝐼𝑠, 𝐼𝑟, 𝐼𝑏]. At training time 𝑏is the
+behavior of the logged target, selected according to the priority
+order order ≻cart ≻click ≻exposure; at inference time 𝑏is set by
+the business goal of the scene, with no auxiliary model involved.
+The decoder attends to 𝐼𝑏at every step, so the target behavior
+shapes the whole autoregressive generation, most strongly at the
+first codebook level 𝑠1 that fixes an item’s broad category. This
+yields the behavior-conditioned objective
+𝑝𝜃(𝑌| 𝑋, 𝐼𝑠, 𝐼𝑟, 𝐼𝑏),
+𝐼𝑏= 𝜓(Emb(𝑏)).
+(3)
+4.2
+Behavior-Aware Training
+A user session logs many behavior events, but training on only a
+few targets per sample discards much of the available supervision,
+and frequent exposures dominate the rare cart and order events that
+carry the most value. This works against the behavior instruction:
+𝐼𝑏names a target behavior, while a loss dominated by exposures
+pulls the model the other way.
+4.2.1
+Target selection and expansion. For each user sample we tra-
+verse all of its logged targets and expand them into independent
+training instances, each paired with its own 𝐼𝑏. We drop targets
+that carry only an exposure, with no click, cart, or order, and keep
+the instances whose behavior is discriminative. Every surviving
+instance is a pair of a behavior-labeled target and its matching
+3
+
+
+--- PAGE 4 ---
+Tang et al.
+shared
+backbone 𝜃
+Encoder
+Decoder
+Student
+deployment policy 𝜋!
+cross-attn
+User Info
+generated 𝑌#
+  𝑠!
+  𝑠"
+  𝑠#
+[BOS]
+𝐼!
+𝐼"
+𝐼#
+EA-TOSD
+Update
+Encoder
+Decoder
+cross-attn
+User Info
+generated 𝑌#
+  𝑠!
+  𝑠"
+  𝑠#
+[BOS]
+𝐼!
+𝐼"
+𝐼#
+𝐹
+same 𝜋!
++ near-future prefix 𝐹
+Teacher
+GT
+RL Reward
+ℎ$,& = 𝐼𝑦̂',& = 𝑦&
+⋆
+Verifiable Reward
+Behavior Label
+Look Ahead Targets
+click
+cart
+ord
+.
+.
+Target Item Info
+Figure 2: Overview of OxygenREC-v2. The behavior label of each logged target is embedded as the instruction 𝐼𝑏and appended
+to the decoder prefix, so the deployed policy conditions SID generation on the target behavior. In post-training, the same target
+supplies behavior-filtered ground truth for the verifiable reward, while a training-only privileged teacher reuses the backbone
+with a near-future prefix 𝐹to transfer future-informed preferences to the student.
+instruction, so the supervision and the instruction agree by con-
+struction. In the listwise daily setting, we pack the 𝑁surviving
+targets of a user context into a single sequence and decode them
+together, where each target is one item written as its SID triple
+(𝑠1,𝑠2,𝑠3). Flattened over the three codebook levels, this gives the
+SID-token sequence 𝑌= (𝑦1, . . . ,𝑦𝐿) of Section 3 with 𝐿= 3𝑁
+decoding steps. The decoder thus produces a list of 𝑁items in
+one pass rather than a single item, and this listwise sequence is
+the same form the verifiable reward and distillation operate on in
+post-training.
+4.2.2
+Behavior-weighted objective. We weight the loss by behavior
+value 𝑤𝑏to each interaction type, giving the pre-training objective
+Lpre =
+1
+|T |
+∑︁
+(𝑦𝑡,𝑏)∈T
+𝑤𝑏CE 𝑝𝜃(𝑦𝑡| 𝑋, 𝐼𝑠, 𝐼𝑟, 𝐼𝑏), 𝑦𝑡
+.
+(4)
+Here T is the set of (SID token, behavior) pairs over all expanded
+training instances in the batch: each target token 𝑦𝑡inherits the
+behavior label 𝑏of the item it belongs to, and 𝑤𝑏is that behavior’s
+value weight. The weight ordering matches the instruction priority
+and, later, the teacher’s behavior threshold, so a single behavior-
+value scale runs through the whole pipeline.
+4.3
+Post-training: Verifiable Rewards and
+Privileged Distillation
+We propose EA-TOSD, a post-training framework that couples
+verifiable best-trajectory optimization with entropy-aware dual
+privileged self-distillation. EA-TOSD optimizes the student trajec-
+tory by three components: selecting the optimal generated trajec-
+tory through a verifiable reward, constructing a privileged teacher
+augmented with future behavioral information, and performing
+entropy-aware dual self-distillation that adapts supervision to the
+teacher’s uncertainty.
+4.3.1
+Verifiable rewards for trajectory optimization. In recommen-
+dation, reward signals [12, 9] usually come from a trained ranking
+model that scores each candidate. We instead use the hit rate of
+the generated SID as a verifiable reward. Let 𝑋denote a user con-
+text sampled from the dataset D, and let 𝑌★= (𝑦★
+1 , . . . ,𝑦★
+𝐿) denote
+the corresponding ground-truth SID token sequence, with 𝐿= 3𝑁
+steps over the 𝑁listwise targets. Given 𝑋, the current student
+policy generates a group of 𝐺candidate sequences { ˆ𝑌𝑖}𝐺
+𝑖=1, where
+ˆ𝑌𝑖= ( ˆ𝑦𝑖,1, . . . , ˆ𝑦𝑖,𝐿) and { ˆ𝑌𝑖}𝐺
+𝑖=1 ∼𝜋𝑆(· | 𝑋). Here ˆ𝑦𝑖,𝑡is the SID
+token generated at step 𝑡of the 𝑖-th sampled sequence, and ˆ𝑦𝑖,<𝑡its
+preceding prefix, so the student predicts the next token according to
+𝜋𝑆(· | 𝑋, ˆ𝑦𝑖,<𝑡). For a candidate sequence 𝑖, we read off the per-step
+hits
+ℎ𝑖,𝑡= I
+
+ˆ𝑦𝑖,𝑡= 𝑦★
+𝑡
+
+,
+𝑡= 1, . . . , 𝐿,
+(5)
+and aggregate them into a scalar using a geometric weighting
+scheme. Earlier decoding steps correspond to the coarser codebook
+levels that fix an item’s broad category.
+𝜔𝑡=
+𝛾𝑡−1
+Í𝐿
+𝑗=1 𝛾𝑗−1 ,
+𝑅𝑖=
+𝐿
+∑︁
+𝑡=1
+𝜔𝑡ℎ𝑖,𝑡∈[0, 1],
+(6)
+where 𝛾is a geometric decay factor, 𝜔𝑡is the weight of step 𝑡and
+𝑅𝑖is the verifiable reward value of generated sequence 𝑖. For each
+context 𝑋sampled from D, we draw 𝐺candidate trajectories from
+the current student policy and let 𝑘denote the trajectory with the
+highest verifiable score, 𝑅𝑘= max𝑖∈{1,...,𝐺} 𝑅𝑖. We then reinforce
+all tokens in the selected trajectory using its verifiable score as a
+trajectory-level weight:
+LVR = E𝑋∼D
+"
+−𝑅𝑘
+𝐿
+∑︁
+𝑡=1
+log 𝜋𝑆
+  ˆ𝑦𝑘,𝑡| 𝑋, ˆ𝑦𝑘,<𝑡
+
+#
+.
+(7)
+The expectation implicitly includes the randomness from sam-
+pling the candidate group and selecting its highest-scoring trajec-
+tory. In the subsequent distillation Section 4.3.2 and Section 4.3.3,
+we perform the subsequent distillation on the selected trajectory 𝑘.
+4.3.2
+Privileged teacher structure. Existing OPD methods [15] rely
+on a separate, stronger teacher. OPSD [27] lets a student model
+learn from its own generated trajectories under richer and more
+4
+
+
+--- PAGE 5 ---
+OxygenREC-v2: Internalizing Discrimination into Generative Recommendation
+informative supervision, providing an effective post-training para-
+digm for LLMs. In industrial recommendation, a natural extension
+is to equip the teacher with privileged inputs. We give the teacher
+the user’s future interactions as privileged information, aligning
+the model with user preferences through behavioral signals. As
+Figure 2 shows, we take the items the user actually interacts with
+in the future, including clicks, add-to-cart actions, and completed
+purchases, and prepend them to the decoder input as a privileged
+decoding prefix 𝐹: a teacher-only block built from the SIDs of at
+most 𝑚near-future targets, with construction details in Appen-
+dix E. The teacher shares the student’s backbone and differs only
+by this extra prefix, giving a student policy 𝜋𝑆and a teacher policy
+𝜋𝑇. At each position of the student-generated sequence, the priv-
+ileged teacher produces a more confident predictive distribution,
+so its distillation signals guide the student toward higher quality
+sequences.
+4.3.3
+Entropy-aware dual self-distillation from a privileged teacher.
+To complement the sparse hit-based signals, we use the privileged
+teacher to provide dense token-level distillation supervision. Given
+the teacher policy 𝜋𝑇and the student policy 𝜋𝑆, the privilege ad-
+vantage of predicted position 𝑡is
+A𝑡= log 𝜋𝑇( ˆ𝑦𝑡| 𝑋, 𝐹, ˆ𝑦<𝑡) −log 𝜋𝑆( ˆ𝑦𝑡| 𝑋, ˆ𝑦<𝑡) ,
+(8)
+where ˆ𝑦𝑡is the SID token at step 𝑡of the selected trajectory, and 𝐹
+is the training-only privileged prefix that encodes the user’s near-
+future targets (Appendix E). The term A𝑡transfers the teacher’s
+future-informed preference signal to the student policy conditioned
+only on observable history. However, the privileged teacher does
+not provide beneficial distillation signals at every prediction posi-
+tion. For each student generated prefix, we compute the privileged
+teacher’s predictive entropy at the next-token position and use
+an entropy gate to decide whether the corresponding token-level
+distillation loss is active. 𝐻𝑇
+𝑡denotes the token-level entropy of the
+teacher at step 𝑡:
+𝐻𝑇
+𝑡= −
+∑︁
+𝑣∈V
+𝜋𝑇(𝑣| 𝑋, 𝐹, ˆ𝑦<𝑡) log 𝜋𝑇(𝑣| 𝑋, 𝐹, ˆ𝑦<𝑡),
+(9)
+where 𝑣is a candidate token in the vocabulary V. Low-entropy
+positions indicate a clear token-level distillation direction, while
+high-entropy positions capture multiple plausible future prefer-
+ences. We therefore use a binary low-entropy gate 𝑔𝑙
+𝑡= I 𝐻𝑇
+𝑡< 𝜏𝑙
+
+and a high-entropy gate 𝑔h
+𝑡= I 𝐻𝑇
+𝑡> 𝜏ℎ
+ to selectively distill pref-
+erence information at each generation position. The normalized
+weights e𝑔𝑙
+𝑡and e𝑔ℎ
+𝑡then average the distillation loss over the selected
+tokens:
+e𝑔𝑙
+𝑡=
+𝑔𝑙
+𝑡
+Í𝐿
+𝑗=1 𝑔𝑙
+𝑗+ 𝜖
+,
+e𝑔ℎ
+𝑡=
+𝑔ℎ
+𝑡
+Í𝐿
+𝑗=1 𝑔ℎ
+𝑗+ 𝜖
+.
+(10)
+Under the low-entropy gate, the privileged teacher supplies reli-
+able distillation signals with a clear user-preference direction, which
+realizes OPSD at industrial recommendation scale. The resulting
+entropy-aware self-distillation loss from the privileged teacher is
+LSD = E𝑋∼D
+"
+−
+𝐿
+∑︁
+𝑡=1
+e𝑔𝑙
+𝑡sg(A𝑡) log 𝜋𝑆( ˆ𝑦𝑡| 𝑋, ˆ𝑦<𝑡)
+#
+,
+(11)
+where sg(·) is the stop-gradient operator. To preserve multiple plau-
+sible future user preferences and keep the student from prematurely
+collapsing onto a single mode, we further apply a forward KL diver-
+gence at the high-entropy positions (𝐻𝑇
+𝑡> 𝜏ℎ), which transfers the
+teacher’s uncertainty and global structure [11]. The high-entropy
+FKL objective is
+LFKL = E𝑋∼D
+" 𝐿
+∑︁
+𝑡=1
+e𝑔h
+𝑡𝐷KL(𝜋𝑇(· | 𝑋, 𝐹, ˆ𝑦<𝑡) ∥𝜋𝑆(· | 𝑋, ˆ𝑦<𝑡))
+#
+.
+(12)
+4.3.4
+Training objective. Post-training optimizes three terms in
+parallel as a weighted sum: the verifiable-reward objective LVR,
+the low-entropy privileged distillation LSD, and the high-entropy
+forward-KL term LFKL, with manually set weights 𝜆, 𝛽,𝜁.
+LEA-TOSD = 𝜆LVR + 𝛽LSD + 𝜁LFKL.
+(13)
+The supervised fine-tuning next-token loss (SFT) runs alongside
+the reinforcement update rather than alternating with it. It anchors
+the policy to the pre-training distribution and adds dense supervi-
+sion next to the sparse hit, playing the role of a pre-training-mix
+(PTX) regularizer. With the external ranking model removed, the
+reward reduces to one verifiable signal, and the supervised and
+distillation terms act as complementary regularizers.
+5
+Experimental Setup
+Data. We train and evaluate on proprietary interaction logs from
+JD.com, one of the largest industrial e-commerce platforms in the
+world. Each example pairs a user context with the items the user
+engaged with, labeled by behavior type (exposure, click, add-to-cart,
+order), and we follow the listwise daily setting used in pre-training,
+where a user context is matched with a group of engaged items
+decoded as one packed sequence. Training covers one month of
+logs and evaluation uses the following day. Full dataset statistics
+and the item tokenizer are given in Appendix G.
+Metrics. We measure two abilities. For retrieval, we report HR@𝐾
+(Hit Rate) and Recall@𝐾at𝐾∈{1, 128, 512}, which capture whether
+the generated candidates recover the engaged items. For ranking,
+we report NDCG@512 (Normalized Discounted Cumulative Gain)
+and MRR@512 (Mean Reciprocal Rank) over the decoded list, to-
+gether with GAUC (Group Area Under the Curve): the model scores
+the logged candidate list, and GAUC is computed per user and av-
+eraged over the test set, both overall and separately for click, cart,
+and order. Higher is better for all metrics.
+Compared methods. We compare three variants under the same
+backbone and decoding format. OxygenREC-v1 (PT-only) is the
+pre-trained checkpoint without post-training by following the same
+setting in [10]. Proxy-RM follows the external discriminator pat-
+tern of the prior industrial system [28, 26, 10] with a unified ranking
+model used as a proxy reward by finetuning OxygenREC-v1 (PT-
+only). OxygenREC-v2 is our proposed method. All variants share
+one backbone and add no inference-time module. All offline studies
+use a 3B encoder-decoder backbone. Backbone size, optimizer, and
+default hyperparameters are listed in Appendix G.
+Online A/B protocol. We deploy OxygenREC-v2 as a 3B-parameter,
+1B-activated (3B-A1B) MoE on JD.com’s industrial e-commerce plat-
+form and run bucketed A/B tests on six production surfaces, each
+compared to models then in production. Buckets receive 5–20% of
+5
+
+
+--- PAGE 6 ---
+Tang et al.
+Table 1: Main comparison under one backbone. Proxy-RM replaces our verifiable reward with an external ranking model. Bold
+marks the best result in each column; small green numbers give OxygenREC-v2’s gain over the OxygenREC-v1 (PT-only) base.
+Retrieval
+Ranking
+Method
+HR@1
+HR@128
+HR@512
+Recall@512
+NDCG@512
+MRR@512
+GAUC
+OxygenREC-v1 (PT-only)
+4.62%
+33.08%
+43.24%
+34.95%
+0.6211
+0.5143
+0.6207
+Proxy-RM
+5.54%
+33.89%
+43.09%
+36.24%
+0.6246
+0.5343
+0.6195
+OxygenREC-v2
+5.64%(+1.02%)
+33.76%(+0.68%)
+44.14%(+0.90%)
+36.39%(+1.44%)
+0.6254(+0.0043)
+0.5369(+0.0226)
+0.6218(+0.0011)
+Table 2: Pre-training ablation, one component at a time.
+Retrieval
+Ranking
+Ablation
+HR@1
+HR@128
+HR@512
+Recall@512
+NDCG@512
+MRR@512
+GAUC
+(a) OxygenREC-v1 (PT-only, w/o 𝐼𝑏)
+4.62%
+33.08%
+43.24%
+34.95%
+0.6211
+0.5143
+0.6207
+(b) + 𝐼𝑏
+4.78%
+33.47%
+43.55%
+35.11%
+0.6223
+0.5166
+0.6218
+(c) + 𝑤𝑏
+4.91%
+33.63%
+43.82%
+35.25%
+0.6224
+0.5166
+0.6218
+surface traffic and run for five to eight days; we report relative lift
+on UCTR, UCTCVR and GMV, with significance from the platform’s
+standard two-sided test. Surfaces are grouped by the user-lifecycle
+stages of OxygenREC-v1 [10], spanning the homepage floors, chan-
+nel feeds, checkout paths, and product-detail pages.
+6
+Experimental Results
+6.1
+Main Results
+Table 1 compares three models on the same backbone: the pre-
+trained OxygenREC-v1 (PT-only) checkpoint, the proxy-reward
+baseline that follows the external discriminator pattern (Proxy-
+RM), and our full model OxygenREC-v2. We evaluate two abilities:
+retrieval, whether the generated candidates recover the engaged
+items (HR@𝐾and Recall@𝐾), and ranking, whether items that re-
+ceived a behavior are ranked higher under the matching instruction
+(NDCG@512, MRR@512, and GAUC).
+OxygenREC-v2 wins the retrieval metrics that decide the candi-
+date set. It reaches 44.14% HR@512 and 36.39% Recall@512, ahead
+of OxygenREC-v1 by 0.90 and 1.44 points and ahead of Proxy-RM
+by 1.05 and 0.15. The gap widens at the top of the list: HR@1 rises
+from 4.62% to 5.64%, a 1.02-point gain over v1 that lifts the hardest
+retrieval metric the most. On ranking, OxygenREC-v2 also leads on
+all three metrics, with NDCG@512 0.6254, MRR@512 0.5369, and
+GAUC 0.6218, improving over v1 by 0.0043, 0.0226, and 0.0011.
+Proxy-RM shows why an external reward is not enough. It im-
+proves ranking over v1 (0.6246 NDCG, 0.5343 MRR) but stalls on
+HR@512 (43.09%, below v1’s 43.24%): the proxy reward reorders
+candidates without pulling behavior-relevant items into the set.
+OxygenREC-v2 avoids this by conditioning generation on the tar-
+get behavior, so the retrieval and ranking gains come together.
+Takeaway. Internalizing the behavior signal, rather than attach-
+ing it as an external reward, improves the candidate set itself:
+OxygenREC-v2 leads on six of seven metrics and gains most on
+HR@1 and Recall@512, the metrics that reward retrieving the right
+items rather than reordering a fixed list.
+6.2
+Ablation Study
+6.2.1
+Pre-training ablation. Table 2 isolates the pre-training com-
+ponents by adding them one at a time on the same backbone: (a) the
+Base generator without the behavior instruction; (b) + 𝐼𝑏, adding
+the behavior instruction; and (c) +𝑤𝑏, further adding the behavior-
+weighted loss, which is our full pre-training. On the same retrieval
+and ranking metrics as the main comparison, both components im-
+prove retrieval monotonically: HR@512 rises from 43.24% (Base) to
+43.55% with 𝐼𝑏and to 43.82% with the behavior-weighted loss, and
+Recall@512 follows the same order (34.95% →35.11% →35.25%).
+NDCG@512 is highest for the full configuration, while MRR@512
+and GAUC saturate once 𝐼𝑏is added, tying at 0.5166 and 0.6218 for
+(b) and (c). Each component contributes a small but consistent gain,
+and the two are complementary rather than redundant.
+Table 3: Ablation on the privileged information used to aug-
+ment the teacher.
+Method
+HR@1
+HR@512
+Recall@512
+Proxy-RM
+5.54%
+43.09%
+36.24%
+Privileged Teacher (Expo)
+5.62%
+43.80%
+36.19%
+Privileged Teacher (Click)
+5.64%
+44.14%
+36.39%
+6.2.2
+Privileged teacher. The selection of privileged information
+for the teacher is not arbitrary. Table 3 compares different choices
+of future interaction behaviors used to augment the teacher. In
+the Expo setting, the privileged information includes all future
+interacted items, covering exposure-only, exposure-and-click, click-
+and-add-to-cart, and add-to-cart-and-purchase behaviors. In the
+Click setting, exposure-only items are excluded, and the privileged
+information consists of items associated with exposure-and-click,
+click-and-add-to-cart, and add-to-cart-and-purchase behaviors.
+The results show that the Click setting achieves the best overall
+performance, reaching 5.64% HR@1, 44.14% HR@512, and 36.39%
+Recall@512. In contrast, including exposure-only items slightly
+reduces HR@512 and Recall@512 to 43.80% and 36.19%, respectively.
+6
+
+
+--- PAGE 7 ---
+OxygenREC-v2: Internalizing Discrimination into Generative Recommendation
+This suggests that exposure only items add noise; clicked items
+associated with deeper interactions give cleaner privileged signals.
+6.2.3
+Training objectives. To investigate the contribution of each
+training objective, we progressively remove individual loss compo-
+nents from the complete post-training objective (𝜆, 𝛽,𝜁in Eq. 13; de-
+fault 𝜆=0.1, 𝛽=𝜁=0.01). w/o FKL keeps entropy-aware self-distillation
+from the privileged teacher but drops the high-entropy FKL term
+(𝜁=0); w/o FKL&SD enables only the verifiable best-trajectory ob-
+jective (𝛽=𝜁=0); SFT only is the supervised baseline without post-
+training (𝜆=𝛽=𝜁=0); and EA-TOSD activates all components. Table 4
+lists the weights alongside the metrics.
+Table 4: Ablation on post-training objectives, with the loss
+weights of Eq. 13.
+Method
+HR@1
+HR@512
+Recall@512
+EA-TOSD
+5.64%
+44.14%
+36.39%
+w/o FKL
+5.59%
+43.80%
+36.21%
+w/o FKL&SD
+5.64%
+43.65%
+36.14%
+SFT only
+5.52%
+43.65%
+36.20%
+Table 4 presents the ablation results for different post-training
+objectives. Starting from the complete EA-TOSD framework, remov-
+ing FKL degrades HR@512 from 44.14% to 43.80% and Recall@512
+from 36.39% to 36.21%, indicating that entropy-aware FKL provides
+complementary supervision for uncertain prediction positions. Fur-
+ther removing privileged self-distillation reduces HR@512 to 43.65%
+and Recall@512 to 36.14%, demonstrating the effectiveness of dense
+token-level supervision from the privileged teacher. Finally, further
+removing VR leads to a decrease in HR@1 from 5.64% to 5.52%,
+confirming that the proposed trajectory optimization and entropy-
+aware self-distillation jointly contribute to the performance gains.
+6.2.4
+Entropy-based token routing. Since the privileged teacher
+does not provide equally reliable supervision at every prediction
+position, we investigate how the coverage of entropy-based rout-
+ing affects the final recommendation performance. Specifically, we
+vary the entropy thresholds (𝜏𝑙,𝜏ℎ) to control the proportions of
+prediction positions routed to SD and FKL, denoted by 𝜌𝐿and 𝜌𝐻.
+As shown in Table 5, applying distillation to all prediction positions
+(100%/100%) does not achieve the best performance. Reducing the
+routing coverage to 20% for both SD and FKL improves HR@1 from
+5.42% to 5.64%, HR@512 from 43.87% to 44.14%, and Recall@512
+from 36.27% to 36.39%. Increasing the coverage to 40% also under-
+performs the 20% setting. These results demonstrate that only a
+subset of prediction positions provides reliable privileged supervi-
+sion, validating the effectiveness of entropy-based token routing
+over indiscriminate full-token distillation.
+Table 5: Ablation on entropy-based token routing.
+Distillation Token Ratio
+HR@1
+HR@512
+Recall@512
+𝜌L = 𝜌H = 100%
+5.42%
+43.87%
+36.27%
+𝜌L = 𝜌H = 40%
+5.44%
+43.80%
+36.21%
+𝜌L = 𝜌H = 20%
+5.64%
+44.14%
+36.39%
+Table 6: Online A/B results across deployment surfaces,
+grouped by user-lifecycle stage (relative lift over the pro-
+duction model; ∗significant at 𝑝< 0.05).
+Stage
+Surface
+UCTR
+UCTCVR
+GMV
+Homepage Floor
+Scenario 1
++0.09%
++3.62%∗
++21.21%∗
+Channel Feeds
+Scenario 2
++0.08%
++1.61%∗
++2.80%
+Scenario 3
++1.39%∗
++4.44%∗
++6.86%
+Scenario 4
++0.01%
++2.90%∗
++1.09%
+Checkout Path
+Scenario 5
+−0.34%
++2.15%∗
+−2.34%
+Scenario 6
+−0.03%
++0.56%
++4.25%∗
+6.3
+Online A/B Testing
+We evaluate OxygenREC-v2 online with bucketed A/B tests on six
+production surfaces, each compared against the model then serving
+it. Table 6 reports the lift on UCTR, UCTCVR and GMV.
+The pre-training upgrade (listwise decoding with the behav-
+ior instruction) drives conversion on the feed and floor surfaces:
+UCTCVR rises by 1.6–4.4% and is significant on every one of them,
+while UCTR stays essentially flat, so the upgrade changes which
+items convert rather than inflating clicks. GMV moves in the same
+direction but is noisier, as expected for a long-tail-dominated metric,
+reaching significance on the homepage floor (+21.2%) and staying
+directional on the feeds. The add-to-cart overlay (Scenario 5) is
+the lone exception: its GMV is slightly negative but not signifi-
+cant (−2.3%, 𝑝=0.23), within day-to-day fluctuation rather than a
+real regression. The post-training upgrade (verifiable reward with
+privileged distillation), evaluated on the product-detail surface (Sce-
+nario 6) under a unified all-scene policy, lifts GMV by 4.3% (𝑝=0.048).
+Across surfaces the gains are consistent in sign and, on the metrics
+that decide revenue, reach significance despite the short measure-
+ment windows.
+7
+Analysis: How the Behavior Instruction
+Reshapes Generation
+Does the behavior instruction 𝐼𝑏genuinely steer generation or
+does the model learn to ignore it as a passive label? We probe
+the pre-trained model directly: for a fixed set of user contexts, we
+vary only the injected 𝐼𝑏and inspect both retrieval quality and the
+composition of the generated candidates. Figure 3 summarizes the
+two findings.
+Behavior conditioning improves the sparse, high-value behaviors
+most. Figure 3(a) reports the per-behavior HR@512 with and with-
+out the behavior instruction, conditioning each case on its true
+target behavior. Adding 𝐼𝑏lifts every behavior, but the gain concen-
+trates on the order behavior (the sparsest yet highest-value signal),
+which improves far more than click. The behavior signal is most
+useful precisely where behavior-agnostic generation has the least
+to go on, directing modeling capacity toward the conversions the
+platform cares about.
+Scenario 1: Budget & Free Shipping homepage floor; Scenario 2: Billion Subsidy channel
+feed; Scenario 3: Budget & Free Shipping channel feed; Scenario 4: Seckill feed; Scenario
+5: Add-to-Cart Overlay; Scenario 6: RecForU.
+7
+
+
+--- PAGE 8 ---
+Tang et al.
+Click
+Cart
+Order
+42
+46
+50
+54
+HR@512 (%)
++0.14
++0.93
++3.35
+(a) Ib lifts accuracy
+w/o Ib
+w/ Ib
+Click
+Cart
+Order
+0
+25
+50
+75
+Candidate share (%)
+×3.7
++17.4
+(b) Ib steers candidates
+force Ib = order
+force Ib = click
+Figure 3: Behavior conditioning reshapes generation. (a) The
+behavior instruction 𝐼𝑏improves per-behavior HR@512, with
+the largest gain on the sparse, high-value order behavior. (b)
+Forcing 𝐼𝑏to a fixed behavior shifts the generated candidate
+set toward that behavior, showing that 𝐼𝑏changes what is
+generated rather than only how candidates are scored.
+Forcing the instruction steers the candidate set. Figure 3(b) tests
+whether 𝐼𝑏controls generation rather than just annotating it. We
+override the instruction at inference, decoding every context under
+a single fixed behavior, and measure the behavior composition of
+the generated Top-𝐾candidates using a leakage-free item–behavior
+prior. The candidate mix shifts markedly toward the forced behavior:
+forcing order pulls the set toward order-associated items, while
+forcing click pulls it toward click-associated ones. This also holds
+under the true-target metric: forcing order holds the order subset at
+53.0 HR@512 while dropping click to 34.5, and forcing click holds
+click but loses nearly five points on order (App. B.5). The same user
+and model produce visibly different candidate sets under different
+behavior instructions.
+Output-side alternatives cannot provide this property. A behav-
+ior classifier or an autoregressive behavior suffix only reorders
+a candidate set that was already generated behavior-agnostically,
+changing how candidates are scored, not which are produced. Plac-
+ing the signal on the input side, as 𝐼𝑏does, moves the intervention
+upstream into generation itself, so the candidate distribution be-
+comes behavior-aware by construction, which is exactly what the
+downstream verifiable reward then reinforces.
+The behavior signal separates the internal generation state. The
+two effects above are measured on the model’s outputs; we now look
+inside the decoder. For each context, we take the decoder hidden
+state at the first decoding step, after the prefix [bos, 𝐼𝑠, 𝐼𝑟, 𝐼𝑏] is
+consumed but before any SID token is emitted, which is where
+𝐼𝑏can steer generation. Projecting these states onto the first two
+linear discriminant axes of a behavior-supervised LDA (Figure 4),
+the behavior-agnostic model collapses the three behaviors into one
+indistinguishable cloud, whereas our model resolves them into three
+separated clusters. The instruction thus reorganizes the generation
+state by target behavior before the first token is produced, the
+mechanism underlying the candidate-set shift reported above.
+8
+Conclusion
+We asked whether the discriminative behavior signal in generative
+recommendation, the clicks, cart-adds, and orders, can be built into
+0
+20
+LD1
+−5
+0
+5
+10
+LD2
+(a) w/o Ib
+Click
+Cart
+Order
+0
+20
+LD1
+(b) w/ Ib
+Figure 4: First-step decoder hidden states projected onto the
+first two linear discriminant axes (LD1, LD2) of a behavior-
+supervised LDA, colored by behavior. (a) w/o 𝐼𝑏: the three
+behaviors collapse into one cluster. (b) w/ 𝐼𝑏: they separate,
+showing that the instruction conditions the generation state
+before the first token.
+the generator’s training objective rather than added afterward by
+a separate reward model. We presented OxygenREC-v2, which in-
+ternalizes discrimination into generative recommendation (IDGR):
+it conditions generation on behavior from the first decoding step
+and replaces the proxy reward with a verifiable behavior-match
+reward and privileged distillation, all on one shared backbone. The
+behavior signal steers what the model generates, not just how
+outputs are scored, with the largest gains on order, the sparsest
+and highest-value behavior. On JD.com’s e-commerce platform,
+OxygenREC-v2 improves offline retrieval and ranking over the
+external-reward baseline, and, deployed as a 3B-A1B MoE, raises
+online UCTCVR and GMV in bucketed A/B tests. These results
+position the behavior signal as a first-class training objective for
+generative recommenders, not a post-hoc scoring signal. Future
+work extends beyond the click/cart/order hierarchy and reduces
+the training cost of the privileged teacher.
+References
+[1]
+Rishabh Agarwal, Nino Vieillard, Yongchao Zhou, Piotr Stanczyk, Sabela Ramos,
+Matthieu Geist, and Olivier Bachem. 2024. On-policy distillation of language
+models: learning from self-generated mistakes. In International Conference on
+Learning Representations (ICLR).
+[2]
+Edoardo Botta, Jaewon Yang, Yi-Ping Hsu, Laksh Bhasin, Yilin Chen, Prab-
+hat Agarwal, Anirudhan Badrinath, Jiajing Xu, and Charles Rosenberg. 2026.
+PinRec: unified generative retrieval for Pinterest recommender systems. In
+Proceedings of the 32nd ACM SIGKDD Conference on Knowledge Discovery and
+Data Mining (KDD). doi:10.1145/3770855.3818462.
+[3]
+Minmin Chen, Alex Beutel, Paul Covington, Sagar Jain, Francois Belletti, and
+Ed H. Chi. 2019. Top-k off-policy correction for a REINFORCE recommender
+system. In Proceedings of the Twelfth ACM International Conference on Web
+Search and Data Mining (WSDM).
+[4]
+Jiaxin Deng, Shiyao Wang, Kuo Cai, Lejian Ren, Qigen Hu, Weifeng Ding,
+Qiang Luo, and Guorui Zhou. 2025. OneRec: unifying retrieve and rank with
+generative recommender and iterative preference alignment. arXiv preprint
+arXiv:2502.18965. https://arxiv.org/abs/2502.18965.
+[5]
+Haoran Ding et al. 2026. Rec-distill: an industrial distillation pipeline for large-
+scale recommendation models. (2026). https://arxiv.org/abs/2605.29755 arXiv:
+2605.29755 [cs.IR].
+[6]
+Leo Gao, John Schulman, and Jacob Hilton. 2023. Scaling laws for reward model
+overoptimization. In Proceedings of the 40th International Conference on Machine
+Learning (ICML).
+[7]
+Shijie Geng, Shuchang Liu, Zuohui Fu, Yingqiang Ge, and Yongfeng Zhang. 2022.
+Recommendation as language processing (RLP): a unified pretrain, personalized
+8
+
+
+--- PAGE 9 ---
+OxygenREC-v2: Internalizing Discrimination into Generative Recommendation
+prompt & predict paradigm (P5). In Proceedings of the 16th ACM Conference on
+Recommender Systems (RecSys).
+[8]
+Yuxian Gu, Li Dong, Furu Wei, and Minlie Huang. 2024. MiniLLM: on-policy
+distillation of large language models. In International Conference on Learning
+Representations (ICLR).
+[9]
+Daya Guo et al. 2025. DeepSeek-R1: incentivizing reasoning capability in LLMs
+via reinforcement learning. arXiv preprint arXiv:2501.12948. https://arxiv.org/a
+bs/2501.12948.
+[10]
+Xuegang Hao et al. 2025. OxygenREC: an instruction-following generative
+framework for e-commerce recommendation. arXiv preprint arXiv:2512.22386.
+https://arxiv.org/abs/2512.22386.
+[11]
+Woogyeol Jin, Taywon Min, Yongjin Yang, Dennis Wei, Yi Zhou, Swanand
+Ravindra Kadhe, Nathalie Baracaldo, and Kimin Lee. 2026. Entropy-aware on-
+policy distillation of language models. arXiv preprint arXiv:2603.07079. https:
+//arxiv.org/abs/2603.07079.
+[12]
+Nathan Lambert et al. 2024. Tülu 3: pushing frontiers in open language model
+post-training. arXiv preprint arXiv:2411.15124. https://arxiv.org/abs/2411.15124.
+[13]
+Doyup Lee, Chiheon Kim, Saehoon Kim, Minsu Cho, and Wook-Shin Han. 2022.
+Autoregressive image generation using residual quantization. In IEEE/CVF
+Conference on Computer Vision and Pattern Recognition (CVPR). IEEE, 11513–
+11522.
+[14]
+Zihan Liu, Yupeng Hou, and Julian McAuley. 2024. Multi-behavior generative
+recommendation. In Proceedings of the 33rd ACM International Conference on
+Information and Knowledge Management (CIKM). doi:10.1145/3627673.3679730.
+[15]
+Kevin Lu and Thinking Machines Lab. 2025. On-policy distillation. Think-
+ing Machines Lab: Connectionism. https://thinkingmachines.ai/blog/on-policy-
+distillation. doi:10.64434/tml.20251026.
+[16]
+Xiao Ma, Liqin Zhao, Guan Huang, Zhi Wang, Zelin Hu, Xiaoqiang Zhu, and
+Kun Gai. 2018. Entire space multi-task model: an effective approach for esti-
+mating post-click conversion rate. In Proceedings of the 41st International ACM
+SIGIR Conference on Research and Development in Information Retrieval (SIGIR).
+[17]
+Long Ouyang et al. 2022. Training language models to follow instructions
+with human feedback. In Advances in Neural Information Processing Systems
+(NeurIPS).
+[18]
+Shashank Rajput et al. 2023. Recommender systems with generative retrieval.
+In Advances in Neural Information Processing Systems (NeurIPS).
+[19]
+John Schulman, Filip Wolski, Prafulla Dhariwal, Alec Radford, and Oleg Klimov.
+2017. Proximal policy optimization algorithms. arXiv preprint arXiv:1707.06347.
+https://arxiv.org/abs/1707.06347.
+[20]
+Zhanming Shen et al. 2026. Purified OPSD: on-policy self-distillation without
+losing how to think. arXiv preprint arXiv:2607.02234. https://arxiv.org/abs/2607
+.02234.
+[21]
+Joar Skalse, Nikolaus H. R. Howe, Dmitrii Krasheninnikov, and David Krueger.
+2022. Defining and characterizing reward gaming. In Advances in Neural Infor-
+mation Processing Systems (NeurIPS).
+[22]
+Hongyan Tang, Junning Liu, Ming Zhao, and Xudong Gong. 2020. Progres-
+sive layered extraction (PLE): a novel multi-task learning (mtl) model for
+personalized recommendations. In Proceedings of the 14th ACM Conference on
+Recommender Systems (RecSys).
+[23]
+Ruobing Xie, Shaoliang Zhang, Rui Wang, Feng Xia, and Leyu Lin. 2022. A peep
+into the future: adversarial future encoding in recommendation. In Proceedings
+of the Fifteenth ACM International Conference on Web Search and Data Mining
+(WSDM), 1177–1185. doi:10.1145/3488560.3498476.
+[24]
+Chen Xu et al. 2020. Privileged features distillation at Taobao recommendations.
+In Proceedings of the 26th ACM SIGKDD International Conference on Knowledge
+Discovery and Data Mining (KDD), 2590–2598. doi:10.1145/3394486.3403309.
+[25]
+Jiaqi Zhai et al. 2024. Actions speak louder than words: trillion-parameter
+sequential transducers for generative recommendations. In Proceedings of the
+41st International Conference on Machine Learning (ICML).
+[26]
+Kun Zhang et al. 2026. OneMall: one architecture, more scenarios—end-to-
+end generative recommender family at Kuaishou e-commerce. arXiv preprint
+arXiv:2601.21770. https://arxiv.org/abs/2601.21770.
+[27]
+Siyan Zhao, Zhihui Xie, Mengchen Liu, Jing Huang, Guan Pang, Feiyu Chen,
+and Aditya Grover. 2026. Self-distilled reasoner: on-policy self-distillation for
+large language models. arXiv preprint arXiv:2601.18734. https://arxiv.org/abs/2
+601.18734.
+[28]
+Guorui Zhou et al. 2025. Onerec technical report. (2025). https://arxiv.org/abs
+/2506.13695 arXiv: 2506.13695 [cs.IR].
+[29]
+Guorui Zhou et al. 2025. Onerec-v2 technical report. (2025). https://arxiv.org/a
+bs/2508.20900 arXiv: 2508.20900 [cs.IR].
+[30]
+Yanyan Zou et al. 2026. GenRec: a preference-oriented generative framework
+for large-scale recommendation. In Proceedings of the 49th International ACM
+SIGIR Conference on Research and Development in Information Retrieval (SIGIR).
+https://arxiv.org/abs/2604.14878.
+9
+
+
+--- PAGE 10 ---
+Tang et al.
+A
+Notation
+Table 13 collects the symbols used in the preliminaries and method-
+ology. Two granularities recur throughout: the item level, where a
+recommendation is a list of 𝑁items, and the token level, where the
+same list is a flattened sequence of 𝐿= 3𝑁SID tokens indexed by
+the decode step 𝑡.
+B
+Behavior Instruction Construction
+This section gives the implementation details of the behavior-aware
+instruction 𝐼𝑏introduced in the methodology. The main text states
+the construction compactly as 𝐼𝑏= 𝜓(Emb(𝑏)) and the decoder
+prefix as [bos, 𝐼𝑠, 𝐼𝑟, 𝐼𝑏]; here we specify the token mapping, the
+projection network 𝜓, and the prefix layout, then evaluate where
+𝐼𝑏enters the prefix (Appendix B.4) and whether it actually steers
+generation (Appendix B.5).
+B.1
+Behavior Token and Embedding Lookup
+The target behavior 𝑏∈{click, cart, order} is first mapped to a
+reserved vocabulary token. We assign the three behaviors to con-
+secutive identifiers placed above the SID range, so that the behavior
+tokens never collide with item codes,
+tok(𝑏) = 𝜏0 + 𝜌(𝑏),
+𝜌(click) =1, 𝜌(cart) =2, 𝜌(order) =3,
+(14)
+where 𝜏0 is a fixed offset that reserves a contiguous block of
+behavior tokens. The token is then embedded through the decoder’s
+shared embedding table Embdec(·) ∈R𝑑model, the same table used to
+embed SID tokens,
+𝑒𝑏= Embdec
+ tok(𝑏) ∈R𝑑model.
+(15)
+Reusing the decoder embedding table, rather than introducing a
+separate behavior embedding, keeps the behavior signal in the same
+representation space as the tokens the decoder generates and adds
+no new lookup parameters.
+B.2
+Projection Network 𝜓
+The behavior embedding 𝑒𝑏is passed through a lightweight two-
+layer feed-forward projection 𝜓that maps it to the instruction
+𝐼𝑏∈R𝑑model,
+𝐼𝑏= 𝜓(𝑒𝑏) =𝑊2
+ drop 𝜎(𝑊1𝑒𝑏),
+(16)
+with𝑊1 ∈R𝑑ff×𝑑model,𝑊2 ∈R𝑑model×𝑑ff, a LeakyReLU nonlinearity 𝜎
+(negative slope 0.01), and dropout between the layers; the hidden
+width matches the backbone feed-forward size 𝑑ff. The projection is
+initialized from the backbone initializer and trained jointly with the
+model. An optional RMSNorm may precede the first layer when the
+instruction adapter is normalized; it is disabled by default. The pro-
+jection 𝜓is the only parameter added for the behavior instruction,
+and it is shared across the three behaviors.
+B.3
+Decoder Prefix Layout
+The behavior instruction is concatenated along the sequence di-
+mension after the scene and reasoning instructions 𝐼𝑠, 𝐼𝑟, and the
+BOS embedding is prepended, giving the decoder prefix
+
+bos, 𝐼𝑠, 𝐼𝑟, 𝐼𝑏
+
+,
+(17)
+Table 7: Placement of the behavior instruction 𝐼𝑏, under
+each sample’s actual behavior. “None” is the BOS-only base-
+line; columns are HR (%, ↑) overall at Top-1/512 and the per-
+behavior breakdown at Top-512.
+Overall
+Per-behavior @512
+Placement
+@1
+@512
+ord
+cart
+clk
+None (BOS only)
+4.85
+43.60
+49.67
+47.36
+42.85
+Insert-left
+4.96
+43.89
+52.76
+48.01
+42.92
+Insert-right (default)
+5.02
+43.99
+53.02
+48.29
+42.99
+Add-to-BOS
+4.97
+44.16
+52.97
+48.27
+43.17
+followed by the SID tokens of the target. The decoder attends to
+this prefix at every decoding step, so 𝐼𝑏conditions the entire au-
+toregressive generation. The same layout is used at training and
+inference; the only difference is the source of 𝑏, which is the logged
+target behavior during training and the scene’s business goal at
+serving time.
+B.4
+Instruction Placement
+The relative order of the BOS embedding and the instruction block
+[𝐼𝑠, 𝐼𝑏] is a configurable choice that we treat as an ablation axis. Let
+𝐸= [𝐼𝑠, 𝐼𝑏] denote the instruction embeddings. We consider three
+placements that expose the decoder to the same content but differ
+in position: insert-right (default), [bos, 𝐸], the instruction follows
+the BOS token; insert-left, [𝐸, bos], the instruction precedes it;
+and add-to-BOS, bos+𝐸, the single instruction embedding is added
+to the BOS embedding rather than concatenated (applicable when
+the instruction reduces to one token).
+Table 7 evaluates these placements against a no-instruction base-
+line, each conditioned on the sample’s actual behavior; all numbers
+are HR at Top-512 in % (↑), on the same window and backbone as the
+main pre-training experiments. Any placement of 𝐼𝑏improves over
+the baseline, and the gain concentrates on the order subset—the
+sparsest, highest-value behavior—which rises from 49.67 to 53.02.
+The three placements are within 0.3 of one another on the overall
+rate, so the model is insensitive to where 𝐼𝑏sits relative to the BOS
+token; we adopt insert-right by default as it is strongest on the
+order and click subsets.
+B.5
+Behavior Steering
+The placement study conditions on each sample’s true behavior. To
+test whether 𝐼𝑏controls generation rather than merely correlating
+with it, we override the instruction at inference: every sample is
+decoded under a single fixed behavior, regardless of its true target,
+and scored against the true target on each behavior subset. If 𝐼𝑏
+steers the candidate set, forcing a behavior should help the matching
+subset and hurt the others. Table 8 confirms this under the insert-
+right layout: the best score on each subset lies on the diagonal, at
+or within noise of the actual-behavior upper bound. Forcing order
+holds the order subset at 53.01 (vs. 53.02 actual) while dropping the
+click subset from 42.99 to 34.54; forcing click holds the click subset
+at 42.99 but loses nearly five points on order (53.02 to 48.33). The
+instruction does not just annotate the target—it redirects generation
+toward the conditioned behavior, which is why placing the behavior
+10
+
+
+--- PAGE 11 ---
+OxygenREC-v2: Internalizing Discrimination into Generative Recommendation
+Table 8: Behavior steering under insert-right. Each row forces
+𝐼𝑏to a fixed behavior; columns are HR@512 (%, ↑) on the click,
+cart, and order subsets. “Actual” is the true-behavior upper
+bound; the diagonal is in bold.
+Evaluation subset (HR@512)
+Forced 𝐼𝑏
+clk
+cart
+ord
+Actual
+42.99
+48.29
+53.02
+Force clk
+42.99
+46.65
+48.33
+Force cart
+40.20
+48.29
+50.02
+Force ord
+34.54
+44.85
+53.01
+label on the input side outperforms the output-side suffix variants
+of Appendix C.
+C
+Suffix-Based Behavior Modeling
+The behavior-aware instruction 𝐼𝑏places the behavior label on the
+input side of the decoder, conditioning generation on the target
+behavior. A natural alternative is to place the label on the output side
+and let the model predict it. We explore three such suffix variants—
+Suffix AR, Suffix Head, and Suffix MultiTower—which share the
+same backbone and SID tokenizer as our main model and differ
+only in how the behavior label enters the training objective and
+inference procedure.
+C.1
+Suffix AR: Behavior as an Autoregressive
+Token
+Suffix AR extends the SID sequence with a fourth autoregressive
+step that decodes the behavior type 𝑏∈{clk, cart, ord}. Item iden-
+tity and behavior intent are jointly modeled by the same generator:
+𝑝𝜃
+ 𝑠1,𝑠2,𝑠3,𝑏| 𝑋, 𝐼𝑠
+ =
+3
+Ö
+𝑡=1
+𝑝𝜃
+ 𝑠𝑡| 𝑠<𝑡,𝑋, 𝐼𝑠
+
+· 𝑝𝜃
+ 𝑏| 𝑠1:3,𝑋, 𝐼𝑠
+.
+(18)
+Training optimizes the standard weighted next-token loss over all
+four positions; no auxiliary head is introduced. At inference, beam
+search produces hypotheses of the form (𝑠1,𝑠2,𝑠3, ˆ𝑏), ranked by
+the joint log-probability. Behavior is decoded after the item, so it
+cannot influence which items are proposed—only how they are
+ranked within the beam. The candidate distribution itself remains
+behavior-agnostic.
+C.2
+Suffix Head: Behavior as an Auxiliary
+Classifier
+Suffix Head decouples generation from behavior prediction. The
+decoder produces the SID sequence as usual, and a lightweight
+three-way classification head FCE is applied to the final decoder
+hidden state ℎ𝑏after the full SID has been consumed. The training
+objective combines item generation with an auxiliary behavior loss:
+LSuffixHead = LNTP + 𝜆CE FCE(ℎ𝑏), 𝑦𝑏
+,
+(19)
+where 𝑦𝑏is the ground-truth behavior label and 𝜆balances the two
+terms.
+Inference: generate-then-rerank. Generation proceeds in two stages.
+Stage 1 runs beam search over the SID space to produce 𝐾candi-
+dates {(𝑠1
+𝑘,𝑠2
+𝑘,𝑠3
+𝑘)}𝐾
+𝑘=1, free of any behavior conditioning. Stage 2
+scores each candidate by feeding its SID back through the decoder
+and reading off the behavior probabilities p(𝑘) ∈Δ3 from the head.
+The candidates are then reranked by the component matching the
+deployment target 𝑏∗:
+score(𝑘) = p(𝑘)
+𝑏∗.
+(20)
+The reranking strategy can be changed at serving time without
+retraining—a checkout-path scenario reranks by 𝑃(ord), a home-
+page scenario by 𝑃(clk). Behavior prediction is decoupled from item
+generation, giving the reranking step full flexibility. As with Suffix
+AR, however, the generated candidate set is itself behavior-agnostic;
+the head only reorders an already-fixed beam.
+C.3
+Suffix MultiTower: Independent Behavior
+Towers
+Suffix MultiTower treats the three behaviors as independent binary
+labels rather than mutually exclusive classes. Three classification
+towers Fclk, Fcart, Ford are attached to the same hidden state ℎ𝑏, and
+the auxiliary loss is a sum of binary cross-entropy terms:
+Lbeh =
+∑︁
+𝑡∈{clk,cart,ord}
+BCE F𝑡(ℎ𝑏), 𝑦𝑡
+.
+(21)
+This relaxes the single-label assumption of Suffix Head: a clicked
+item that was also added to cart contributes positive supervision
+to both towers. Inference follows the same generate-then-rerank
+pattern as Suffix Head, with the per-tower sigmoid probabilities
+serving as reranking scores. When the deployment context carries
+multiple co-occurring behavior targets, the reranking score can be
+a weighted combination of tower outputs.
+C.4
+Comparison and Empirical Results
+The three variants share the backbone, SID tokenizer, and one-
+month training window of our main model and differ only in how
+the behavior label enters the objective and inference. Each is cold-
+started and trained to convergence (≈294k steps) and evaluated
+with beam size 512, reporting HR (hit rate) and Recall at Top-1 and
+Top-512, with the per-behavior breakdown (order, cart, click) at
+Top-512. For Suffix Head and Suffix MultiTower we report both
+the raw beam (beam) and the reranked output (+rerank); Suffix AR
+carries the behavior inside the beam and has no separate reranking
+stage. Table 9 reports the results.
+Suffix AR is the weakest at Top-512 (HR 42.42, Recall 34.17),
+trailing the other two by more than a point. Decoding the behav-
+ior as a fourth autoregressive token spends a decoding step on
+a label that cannot influence which items are proposed, and the
+added sequence length dilutes the SID prediction. Suffix Head and
+Suffix MultiTower are within 0.01–0.05 of each other on every
+metric, so relaxing the single-label assumption into independent
+per-behavior towers yields no measurable gain; the shared decoder
+hidden state already carries what a behavior classifier can extract.
+Reranking sharpens the top of the list but not the list itself. For
+Suffix Head, HR@1 rises from 4.11 (beam) to 4.88 (+rerank) and
+Recall@1 from 2.50 to 2.99, while every Top-512 column is identical
+before and after. The same holds for Suffix MultiTower (4.44→4.87
+11
+
+
+--- PAGE 12 ---
+Tang et al.
+Table 9: Suffix-based behavior-modeling variants (Appendix C), in % (↑). HR and Recall at Top-1/512, with the per-behavior
+breakdown at Top-512. beam is the raw beam and +rerank the generate-then-rerank output; Top-512 columns are unchanged by
+reranking. Best in bold.
+HR
+Recall
+@1
+@512
+@1
+@512
+Variant
+Stage
+all
+all
+ord
+cart
+clk
+all
+all
+ord
+cart
+clk
+Suffix AR
+beam
+4.74
+42.42
+47.58
+45.45
+41.79
+2.92
+34.17
+40.67
+39.01
+33.67
+Suffix Head
+beam
+4.11
+43.66
+50.04
+47.59
+42.86
+2.50
+35.37
+43.13
+41.21
+34.73
++rerank
+4.88
+43.66
+50.04
+47.59
+42.86
+2.99
+35.37
+43.13
+41.21
+34.73
+Suffix MultiTower
+beam
+4.44
+43.65
+50.01
+47.62
+42.84
+2.70
+35.32
+43.19
+41.28
+34.68
++rerank
+4.87
+43.65
+50.01
+47.62
+42.84
+2.99
+35.32
+43.19
+41.28
+34.68
+HR@1). This is the defining limit of output-side behavior modeling:
+the candidate set is generated before the behavior signal is con-
+sulted, so the label can only reorder a fixed beam and cannot pull
+behavior-relevant items into it. Placing the behavior instruction on
+the input side, as in our main model, is what lets the target behavior
+shape the candidate set during generation rather than after it.
+D
+Post-training Algorithm
+The verifiable reward is anchored on the real behavior target but
+is sparse: most rolled-out items do not exactly reproduce the gold
+SID prefix. Algorithm 1 summarizes one post-training step. Be-
+cause verifiable hits are sparse across the 𝐺rolled-out trajectories,
+we concentrate the reinforcement signal on the highest-scoring
+segment 𝑘= arg max𝑖𝑅𝑖, avoiding the noisy gradients that arise
+when low-reward trajectories are mixed in. Along that segment,
+the teacher entropy 𝐻𝑇
+𝑡routes each token to one of two branches:
+low-entropy positions receive advantage- weighted self-distillation
+LSD, where a clear teacher preference exists, while high-entropy
+positions receive forward KL LFKL, which transfers the teacher’s
+uncertainty structure and prevents premature mode collapse. A
+behavior-weighted SFT anchor LSFT runs in parallel to keep the
+policy close to the pre-training distribution. In this paper, we set
+𝜆= 0.1, 𝛽= 0.01, 𝜁= 0.01, 𝜏𝑙= 0.75, and 𝜏ℎ= 2.6. Figure 5 shows
+the performance of different entropy thresholds.
+E
+Privileged Teacher
+This section details the privileged teacher of Section 4: how the
+future-target prefix 𝐹is built, the teacher variants set by the behav-
+ior threshold, and a formal statement of the sparse-reward gradient
+problem that the distillation is designed to fill.
+E.1
+Future-Target Prefix Construction
+The teacher shares the student backbone and differs only by an
+extra decoder prefix 𝐹that encodes the SIDs of the user’s near-
+future targets. Let the current sample be taken at timestamp 𝑡0, and
+let the logged targets carry timestamps {𝑡𝑗} and behaviors {𝑏𝑗}. We
+order behaviors by the same priority used throughout the pipeline,
+𝜌(any) =0 ≺𝜌(click) =1 ≺𝜌(cart) =2 ≺𝜌(order) =3,
+(22)
+and fix a threshold 𝜌min for the teacher variant. Scanning the targets
+in time order, we keep a target 𝑗as a future target when it lies strictly
+0.1
+0.75
+1.0
+3.0
+Low-entropy threshold 
+43.8
+43.9
+44.0
+44.1
+44.2
+HR@512 (%)
+best
+0.75
+HR@512
+Recall@512
+0.1
+1.5
+2.6
+10.0
+High-entropy threshold 
+h
+43.8
+43.9
+44.0
+44.1
+44.2
+HR@512 (%)
+best
+2.6
+HR@512
+Recall@512
+36.20
+36.25
+36.30
+36.35
+36.40
+36.45
+Recall@512 (%)
+36.20
+36.25
+36.30
+36.35
+36.40
+36.45
+Recall@512 (%)
+Figure 5: Sensitivity of post-training to the entropy gates
+(𝜏𝑙,𝜏ℎ) of the privileged distillation, reported as HR@512
+(blue, left axis) and Recall@512 (red, right axis). (a) Fix
+the best high-entropy threshold and sweep the low-entropy
+threshold 𝜏𝑙∈{0.1, 0.75, 1.0, 3.0}; the peak sits at 𝜏𝑙=0.75. (b) Fix
+the best low-entropy threshold and sweep the high-entropy
+threshold 𝜏ℎ∈{0.1, 1.5, 2.6, 10.0}; the peak sits at 𝜏ℎ=2.6. Both
+axes share the same scale across panels for direct compari-
+son.
+in the future and clears the threshold,
+𝑡𝑗> 𝑡0
+and
+𝜌(𝑏𝑗) ≥𝜌min.
+(23)
+Each kept target is mapped to its 𝑐SID tokens (𝑐=3, the codebook
+depth), targets that contain a padding code are skipped, and we col-
+lect at most 𝑚future targets (default 𝑚=2). The result is truncated
+or padded to the fixed length 𝑚· 𝑐, giving the token block
+𝐹=
+
+sid(𝑗1), sid(𝑗2), . . .
+
+∈Z𝑚·𝑐.
+(24)
+The block is embedded through the same shared decoder embedding
+table used for the behavior instruction and the SID tokens, and
+concatenated after the student prefix, so the teacher decodes from
+[bos, 𝐼𝑠, 𝐼𝑟, 𝐼𝑏, 𝐹] while the student decodes from [bos, 𝐼𝑠, 𝐼𝑟, 𝐼𝑏]. The
+teacher prefix is thus 𝑚· 𝑐embeddings longer than the student
+prefix; the loss routines align the two by this fixed offset. Because
+the teacher is the policy itself with a short look-ahead, the student
+and teacher distributions stay close and the distillation is on-policy,
+and no separate or larger teacher model is required.
+E.2
+Teacher Variants
+The threshold 𝜌min on future targets controls how dense and how
+clean the teacher’s target pool is, and defines the teacher variants
+ablated in the experiments (Table 10). A permissive threshold admits
+12
+
+
+--- PAGE 13 ---
+OxygenREC-v2: Internalizing Discrimination into Generative Recommendation
+Algorithm 1 One post-training step of EA-TOSD: verifiable-reward best-trajectory optimization, entropy-aware privileged distillation, and
+a supervised anchor.
+Require: minibatch B ⊂D of contexts 𝑥with listwise gold 𝑌★= (𝑦★
+1 , . . . ,𝑦★
+𝐿); backbone 𝜋𝜃; rollout group size 𝐺; geometric decay 𝛾;
+teacher-entropy gates 𝜏𝑙≤𝜏ℎ; objective weights 𝜆, 𝛽,𝜁, 𝜆sft; learning rate 𝜂; constant 𝜖.
+1: Let 𝜋𝑆(· | 𝑋) and 𝜋𝑇(· | 𝑋, 𝐹) be the same model 𝜋𝜃under student and teacher conditioning, where 𝐹is the future target privileged
+prefix.
+2: for all 𝑥∈B do
+3:
+Sample 𝐺on-policy trajectories { ˆ𝑌𝑖}𝐺
+𝑖=1 ∼𝜋𝑆(· | 𝑋)
+4:
+Compute the geometrically weighted per-trajectory verifiable reward and select the best-scoring segment:
+𝜔𝑡=
+𝛾𝑡−1
+Í𝐿
+𝑗=1 𝛾𝑗−1 ,
+𝑅𝑖=
+𝐿
+∑︁
+𝑡=1
+𝜔𝑡I
+
+ˆ𝑦𝑖,𝑡= 𝑦★
+𝑡
+
+,
+𝑘= arg
+max
+𝑖∈{1,...,𝐺} 𝑅𝑖
+5:
+Form the verifiable-reward objective on the selected trajectory:
+LVR(𝜃) = −𝑅𝑘
+𝐿
+∑︁
+𝑡=1
+log 𝜋𝑆
+  ˆ𝑦𝑘,𝑡| ˆ𝑦𝑘,<𝑡,𝑋
+6:
+Compute the teacher entropy along segment 𝑘and the normalized low/high-entropy gates:
+𝐻𝑇
+𝑡= −
+∑︁
+𝑣∈V
+𝜋𝑇(𝑣| ˆ𝑦𝑘,<𝑡,𝑋, 𝐹) log 𝜋𝑇(𝑣| ˆ𝑦𝑘,<𝑡,𝑋, 𝐹),
+˜𝑔𝑙
+𝑡=
+I(𝐻𝑇
+𝑡< 𝜏𝑙)
+Í𝐿
+𝑗=1 I(𝐻𝑇
+𝑗< 𝜏𝑙) + 𝜖
+,
+˜𝑔ℎ
+𝑡=
+I(𝐻𝑇
+𝑡> 𝜏ℎ)
+Í𝐿
+𝑗=1 I(𝐻𝑇
+𝑗> 𝜏ℎ) + 𝜖
+7:
+Entropy-aware privileged distillation with privilege advantage A𝑡= log 𝜋𝑇( ˆ𝑦𝑘,𝑡| ˆ𝑦𝑘,<𝑡,𝑋, 𝐹) −log 𝜋𝑆( ˆ𝑦𝑘,𝑡| ˆ𝑦𝑘,<𝑡,𝑋):
+LSD(𝜃) = −
+𝐿
+∑︁
+𝑡=1
+˜𝑔𝑙
+𝑡sg(A𝑡) log 𝜋𝑆
+  ˆ𝑦𝑘,𝑡| ˆ𝑦𝑘,<𝑡,𝑋 ,
+LFKL(𝜃) =
+𝐿
+∑︁
+𝑡=1
+˜𝑔ℎ
+𝑡KL 𝜋𝑇(· | ˆ𝑦𝑘,<𝑡,𝑋, 𝐹) ∥𝜋𝑆(· | ˆ𝑦𝑘,<𝑡,𝑋)
+8:
+Form the supervised anchor LSFT(𝜃): behavior-weighted next-token cross-entropy on the gold targets 𝑦★
+9:
+L𝐸𝐴−𝑇𝑂𝑆𝐷(𝜃) ←𝜆LVR(𝜃) + 𝛽LSD(𝜃) + 𝜁LFKL(𝜃) + 𝜆sft LSFT(𝜃)
+10: end for
+11: Compute L(𝜃) ←
+1
+|B|
+Í
+𝑥∈B L(𝜃) and update 𝜃←𝜃−𝜂∇𝜃L(𝜃)
+exposed items and yields a dense but noisy pool; a strict threshold
+keeps only orders and yields a sparse, high-precision one. The
+ordering matches the behavior-value scale that sets the instruction
+priority and the pre-training loss weights, so a single behavior
+hierarchy runs through the instruction, the loss, and the teacher.
+Table 10: Teacher variants set by the behavior threshold 𝜌min
+on future targets. A lower threshold admits weaker behaviors
+and produces a denser, noisier look-ahead pool.
+Teacher variant
+Behaviors kept
+𝜌min
+Pool
+Add exposure (default)
+expo, clk, cart, ord
+0
+dense / noisy
+Add click
+clk, cart, ord
+1
+medium
+Order only
+ord
+3
+sparse / precise
+F
+Hyperparameter Sensitivity Analysis
+We analyze how sensitive pre-training is to the strength of the
+behavior-value weighting introduced in the behavior-aware train-
+ing scheme. The default weights are 𝑤𝑏= {1.2, 1.5, 2.0} for click,
+cart, and order. To probe the effect of the contrast between be-
+haviors rather than the absolute scale, we introduce a gap-scaling
+factor 𝑘that scales each behavior’s offset from the click weight:
+order and cart are set to 1.2 +𝑘(𝑤𝑏−1.2) while click is fixed at 1.2.
+Thus 𝑘=1 recovers the default weights, 𝑘<1 flattens the differences
+toward uniform weighting, and 𝑘>1 sharpens the contrast between
+high-value and low-value behaviors. All variants share the behavior
+instruction 𝐼𝑏and exposure filtering, and differ only in 𝑘; every
+model is trained to the same ≈295k steps under identical data and
+optimization.
+Figure 6 reports the layer-1 and layer-3 hit rate at Top-512 as a
+function of 𝑘. Both metrics peak at the default 𝑘=1: flattening the
+behavior gap (𝑘=0.5) and sharpening it (𝑘=1.5, 2.0) each degrade
+the hit rate, with the larger contrasts hurting the most (hit3@512
+drops from 43.34 at 𝑘=1 to 42.95 at 𝑘=1.5). This indicates that
+the default behavior weights already lie in a favorable region: the
+model benefits from distinguishing high-value orders from clicks,
+but pushing the contrast beyond the default over-emphasizes rare
+high-value behaviors at the cost of overall retrieval quality. We
+therefore keep 𝑘=1 throughout.
+13
+
+
+--- PAGE 14 ---
+Tang et al.
+0.5
+1.0
+1.5
+2.0
+Behavior-gap scaling factor k
+42.8
+43.0
+43.2
+43.4
+hit3@512 (%)
+default (k = 1)
+hit3@512
+hit1@512
+67.6
+67.8
+68.0
+hit1@512 (%)
+Figure 6: Sensitivity of pre-training to the behavior-gap scal-
+ing factor 𝑘around the default behavior weights {1.2, 1.5, 2.0}
+for click/cart/order. Layer-1 and layer-3 hit rate at Top-512
+both peak at the default 𝑘=1; flattening (𝑘<1) or sharpening
+(𝑘>1) the behavior contrast degrades retrieval. hit𝑘@512 de-
+notes the layer-𝑘hit rate at Top-512.
+G
+Additional Experimental Setup
+G.1
+Dataset and Item Tokenizer
+We use daily interaction logs from a large industrial e-commerce
+platform in Parquet format. Training spans one month (2026-03-25
+to 2026-04-25) and evaluation uses the next day (2026-04-26). Each
+example is a user context—short and lifelong behavior sequences
+together with profile and contextual features—paired with a listwise
+group of engaged items, each labeled by one of four behavior types
+(exposure, click, add-to-cart, order). Items are tokenized with a
+three-level residual-quantization SID tokenizer [18, 13]: every item
+maps to an ordered triple (𝑠1,𝑠2,𝑠3) over three codebooks of size
+8192 each, so decoding one item takes three steps. Table 11 lists the
+key data settings.
+Table 11: Dataset and item-tokenizer configuration.
+Field
+Value
+Domain
+Industrial e-commerce (proprietary)
+Format
+Parquet, random seed 1
+Train span
+2026-03-25 to 2026-04-25
+Eval day
+2026-04-26
+Behavior types
+exposure, click, add-to-cart, order
+Short seq. length
+20
+Lifelong seq. length
+256
+Listwise group size 𝐺
+16–20
+SID codebooks
+3 × 8192 (residual quant.)
+G.2
+Model and Optimization
+The backbone is an encoder–decoder transformer with an MoE
+decoder. Table 12 summarizes the architecture and the optimization
+schedule shared by all pre-training runs. The offline studies use a
+0.7B-parameter configuration; the online deployment (Section 6.3)
+scales the same architecture to a 3B-parameter, 1B-activated (3B-
+A1B) MoE. Post-training reuses this backbone and decoding format
+and adds no inference-time module.
+Table 12: Backbone architecture and optimization settings
+(shared across runs).
+Field
+Value
+𝑑model / 𝑑ff
+2048 / 2048
+Encoder / decoder layers
+4 / 8
+Attention heads / 𝑑𝑘𝑣
+8 / 128
+Decoder experts (MoE)
+8
+Tied embeddings
+yes
+Vocabulary size
+25,000
+Optimizer
+AdamW, lr = 1 × 10−4
+LR schedule
+WarmupCosine, warmup 20k, total 1M
+Global batch size
+1024 × 16 = 16,384
+ZeRO stage
+1 (overlap comm., 50MB bucket)
+Precision
+bf16
+Training steps
+≈295k (EOS-terminated)
+Decoding
+beam 512, length 4, greedy
+Eval sample count
+102,400
+H
+Training Dynamics Visualization
+We trace both training stages to confirm that the behavior signal
+helps optimization without destabilizing it.
+Pre-training. Figure 7 compares the two configurations whose
+training logs we retain: the Base generator and the model with the
+behavior instruction 𝐼𝑏. Both follow the same trajectory, dropping
+from near 13 to just above 4 and flattening after roughly 30k steps.
+The instruction adds only a short decoder prefix, so it neither slows
+convergence nor disturbs the gradient norm, which peaks together
+during warmup and decays into a single stable band. The zoom
+inset shows the payoff: through the converged tail + 𝐼𝑏holds a small
+but consistent margin below Base, matching the retrieval gain in
+Table 2. Conditioning on the target behavior therefore lowers the
+objective it is trained on rather than merely reweighting outputs.
+Post-training. Figure 8 tracks the same backbone under EA-TOSD.
+The supervised loss falls while HR@512 rises to 44.1% (Figure 8a),
+so the verifiable reward and privileged distillation improve retrieval
+without the divergence that an unconstrained proxy reward can
+cause. The two distillation terms converge in step (Figure 8b): the
+verifiable-reward hit loss and the high-entropy forward-KL term
+both decline and flatten, and the supervised anchor keeps the policy
+near the pre-training distribution, visible in the smooth loss trace
+across the run.
+14
+
+
+--- PAGE 15 ---
+OxygenREC-v2: Internalizing Discrimination into Generative Recommendation
+0k
+100k
+200k
+300k
+Training step
+4
+6
+8
+10
+12
+Training loss
+(a) Convergence
+200k
+300k
+4.1
+4.3
+Base (w/o Ib)
++ Ib
+0k
+100k
+200k
+300k
+Training step
+0.0
+0.2
+0.4
+0.6
+0.8
+Gradient norm
+(b) Gradient stability
+Base (w/o Ib)
++ Ib
+Figure 7: Pre-training dynamics over 295k steps. (a) Training loss for the Base generator (w/o 𝐼𝑏) and + 𝐼𝑏; the inset over the
+converged tail resolves the small, consistent margin the behavior instruction opens. (b) Gradient norm for both runs, sharing
+the same warmup peak and settling into one stable regime.
+0k
+10k
+20k
+30k
+Post-training step
+3.5
+3.7
+3.9
+4.1
+Training loss
+(a) Loss and retrieval
+Training loss
+HR@512
+0k
+10k
+20k
+30k
+Post-training step
+0.06
+0.07
+0.08
+0.09
+0.10
+VR
+(b) Distillation components
+Verifiable reward VR
+Forward KL FKL
+38
+40
+42
+44
+HR@512 (%)
+0.003
+0.006
+0.009
+0.012
+FKL
+Figure 8: Post-training dynamics of EA-TOSD over 30k steps. (a) The supervised training loss falls while HR@512 climbs to
+44.1%. (b) The two active distillation components, the verifiable-reward hit loss LVR and the high-entropy forward-KL term
+LFKL, both settle into a stable regime.
+15
+
+
+--- PAGE 16 ---
+Tang et al.
+Table 13: The formal definition of notations used throughout the paper.
+Symbol
+Meaning
+Inputs and instructions
+𝑋
+user interaction context (behavior sequences, profile, context)
+𝐼𝑠, 𝐼𝑟
+scenario instruction and contextual reasoning instruction
+𝐼𝑏
+behavior instruction, 𝐼𝑏= 𝜓(Emb(𝑏))
+𝑏
+target behavior, one of click, cart, order (exposure at train time)
+𝑤𝑏
+behavior-value weight for behavior 𝑏
+𝐹
+privileged future-target prefix (teacher only)
+Items, tokens, and sequences
+(𝑠1,𝑠2,𝑠3)
+SID triple of one item, over three codebooks
+𝑁
+number of items in a listwise recommendation
+𝐿
+number of SID decode steps, 𝐿= 3𝑁
+𝑡
+decode-step (SID-token) index, 𝑡= 1, . . . , 𝐿
+𝑦𝑡
+SID token generated at step 𝑡
+𝑌
+SID-token sequence (𝑦1, . . . , 𝑦𝐿); target in the pre-training objective
+ˆ𝑌
+generated candidate sequence (scored by the external reward)
+ˆ𝑦
+generated SID token of candidate sequence
+𝑌★
+ground-truth SID-token sequence
+𝑌𝑖, 𝑦𝑖,𝑡
+𝑖-th sampled sequence and its token at step 𝑡
+𝑌<𝑡
+prefix of 𝑌before step 𝑡
+V
+SID vocabulary; 𝑣∈V a candidate token
+D
+training dataset
+T
+pre-training set of (SID token, behavior) pairs
+Policies and post-training
+𝜋𝑆, 𝜋𝑇
+student and privileged-teacher policies
+𝐺
+Number of sampled trajectories
+ℎ𝑖,𝑡
+per-step hit indicator, I[𝑦𝑖,𝑡= 𝑦★
+𝑡]
+𝜔𝑡,𝛾
+geometric step weight and its decay
+𝑅𝑖, 𝑅𝑘
+verifiable score of sequence 𝑖; best in the group
+A𝑡
+privilege advantage at step 𝑡
+𝐻𝑇
+𝑡
+teacher predictive entropy at step 𝑡
+𝜏𝑙,𝜏ℎ
+low- and high-entropy gate thresholds
+𝑔𝑙
+𝑡,𝑔ℎ
+𝑡
+low- and high-entropy gates; e𝑔normalized
+LVR, LSD, LFKL
+verifiable-reward, distillation, and forward-KL losses
+𝜆, 𝛽,𝜁
+post-training weights on LVR, LSD, LFKL
+16

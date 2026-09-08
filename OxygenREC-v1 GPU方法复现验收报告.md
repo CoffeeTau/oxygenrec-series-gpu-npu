@@ -1,12 +1,12 @@
 # OxygenREC-v1 GPU 方法复现验收报告
 
-验收时间：2026-09-06 11:00:52 CST  
+验收时间：2026-09-06 12:03:51 CST
 验收范围：论文公开方法的 GPU 自实现、公开数据代理实验和代表性案例检查  
 不在范围：论文私有数据/特征/服务的主表复现、线上收益、NPU 对齐、Agentic Search 扩展效果
 
 ## 1. 验收结论
 
-**OxygenREC-v1 的真实Qwen监督主线已经通过GPU验收；SA-GCPO模块曾在旧`igr_q2i`主线上独立通过，但当前Qwen checkpoint的统一后训练仍需最后一次CUDA验收。**
+**OxygenREC-v1 已在约定范围内完成方法级GPU复现：真实Qwen监督主线和当前checkpoint上的统一SA-GCPO后训练均已通过CUDA与代表轨迹验收。**
 
 当前已完成并有数值、控制流和案例证据的监督链路是：
 
@@ -22,7 +22,7 @@ target 前历史
   -> SID/item 指标与案例报告
 ```
 
-最终待验链路是在上述epoch-3 checkpoint之后继续执行：
+上述epoch-3 checkpoint之后的统一后训练链也已通过：
 
 ```text
 冻结 old policy -> constrained beam候选组 -> 公开代理Reward Mapping
@@ -30,7 +30,7 @@ target 前历史
   -> held-out前后评测与匿名轨迹review
 ```
 
-它**不表示当前 32 条训练样本的 Fast 模型已经得到可用推荐质量**。本轮 32 条 validation 中，IGR 目标 SID 命中 2 条，但 beam 目标商品命中为 0；案例表明约束生成全部合法，个性化生成仍明显欠训练。
+它**不表示当前 32 条训练样本的 Fast 模型已经得到可用推荐质量**。监督评测中IGR有真实目标SID命中而beam仍未命中；统一SA-GCPO后训练的objective方向正确，但held-out HR/MRR/NDCG仍为0。案例表明方法控制流、梯度更新和安全门成立，个性化生成仍明显欠训练。
 
 ## 2. 聚合结果
 
@@ -124,7 +124,32 @@ target 前历史
 
 同一 SID 在 view、addtocart、transaction 事件上得到完全相同的 IGR 分数。当前 `paper_igr` 的分数是 instruction query 与 item/SID 向量的余弦相似度；行为和时间只用于构造上游 Reasoning 或展示诊断，不是候选打分的直接项。因此这是当前论文主线路径的设计结果。若以后加入显式行为/时间重排，应作为 Agentic/增强实验单独切换，不应悄悄改写 `paper_igr`。
 
-## 5. 模块验收表
+## 5. SA-GCPO统一后训练验收
+
+### 5.1 聚合结果
+
+| 项目 | 结果 | 验收含义 |
+|---|---:|---|
+| 训练变体 | `igr_qwen_q2i` | 使用真实Qwen Instruction缓存和paper IGR，而非旧替代链 |
+| alignment / held-out | 32 / 32 | 后训练样本与独立前后评测cohort分离 |
+| old-policy目标覆盖 | 5 | 有真实目标候选可检查，同时保留无目标反例 |
+| target injection | `none`，注入0条 | 候选完全来自old-policy约束beam |
+| objective | `-0.079652 → -0.017510` | 训练目标改善，更新链有效 |
+| 前后HR@1/5、MRR、NDCG | 均为0 | 小样本后训练未建立排序收益 |
+| 前后合法SID率 | `1.0 → 1.0` | 策略更新没有破坏PrefixTrie合法性 |
+| paired ranks | 改善0、恶化0、不变32 | 10次update尚未改变held-out目标排名 |
+
+### 5.2 三个固定规则代表轨迹
+
+- `sa-review-001`同时覆盖“old-policy含真实目标”和“reward差异最大”。真实目标`[38,207,76]`的四个reward分量均为1，总reward为3.2，advantage为1.999758且未被阈值抑制，importance ratio mean为1.171508；其余低reward候选advantage为负、ratio均小于1。这证明无target注入时，高reward真实目标能得到相对概率提升。
+- `sa-review-002`覆盖“策略概率变化最大”。真实目标不在候选组，候选的relative/ranking均为0；两个仅由diversity形成的正advantage被真实目标reward阈值归零，抑制2项，所有ratio均小于1。这是无目标时防止错误候选获得伪正更新的案例，不是命中成功案例。
+- `sa-review-003`覆盖“阈值抑制最多”。4个候选因部分SID相似得到`relative=0.333333`和正advantage=0.500001，但ranking仍为0，四项均被阈值归零。这验证了部分码位匹配不能冒充真实目标奖励。
+
+### 5.3 结论边界
+
+这三类轨迹已经覆盖SA-GCPO在当前主线中最关键的正向更新、负向更新和假阳性门控机制，足以完成方法级验收。由于公开Reward Mapping只是论文私有服务的代理、alignment仅32条且监督模型欠训练，本轮不能声称复现论文工业收益；若以后追求效果，应扩充经审核数据和商品语义，而不是继续在当前smoke cohort调权。
+
+## 6. 模块验收表
 
 | 模块 | 状态 | 验收边界 |
 |---|---|---|
@@ -133,15 +158,15 @@ target 前历史
 | Contextual Reasoning Instruction | 完成-实测 | 真实 Qwen 文本与 hidden state 已进入 Fast 模型；商品语义输入不足已记录 |
 | IGR | 完成-实测 | paper cosine Top-K 与真实命中/漏召回案例均已验证；收益未建立 |
 | Q2I | 完成-实测 | 联合目标、逐样本 cosine、反传和方向均已验证；排序收益未建立 |
-| SA-GCPO / RL | 模块完成；Qwen统一链待CUDA | 旧`igr_q2i`上的公式、reward、rollout和更新链已验证；当前epoch-3已完成代码接入，尚待服务器实测 |
+| SA-GCPO / RL | 完成-代理实测 | 当前真实Qwen checkpoint上的old-policy beam、代理reward、group advantage、目标阈值、importance ratio、更新、held-out评测和匿名轨迹均已CUDA验证；尚未建立排序收益 |
 | Prefix 约束解码 | 完成-实测 | 候选合法率通过；目标命中质量未建立 |
 | Agentic Retrieval Plan | 保留扩展、非 v1 主线 | 与 `paper_igr` 已显式分轨，留待后续对比 |
 | NPU | 暂缓 | 按用户要求不进入本次 v1 GPU 验收 |
 
-## 6. 收口决定与后续
+## 7. 收口决定与后续
 
 1. 不再用这 32 条 smoke cohort 反复调 IGR、Q2I 或 beam 权重；
-2. 当前标记为 **`[监督主线完成；统一SA-GCPO待CUDA]`**，服务器验收通过后再改为`[完成-方法级GPU复现]`；
+2. 当前正式标记为 **`[完成-方法级GPU复现]`**；该状态指论文公开结构与方法在GPU侧可运行，不代表论文指标或工业效果复现；
 3. 当前 checkpoint 和案例报告只作为链路证据，不作为可部署推荐模型；
 4. 若未来单独做质量升级，最有价值的两项是：给 Qwen/Instruction 加入公开商品类目或属性语义；扩大经审核训练 cohort 后再训练 Fast 模型；
 5. 质量升级应另开实验编号，并与当前方法验收基线对照，不阻塞 v1 收口。
