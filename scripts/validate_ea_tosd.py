@@ -41,7 +41,10 @@ def total_gradient(module: torch.nn.Module) -> float:
 
 def logits_max_delta(left, right) -> float:
     """比较两组逐SID位置logits的最大绝对差。"""
-    return max(float((a - b).abs().max()) for a, b in zip(left, right))
+    return max(
+        float((a.detach() - b.detach()).abs().max())
+        for a, b in zip(left, right)
+    )
 
 
 def paths_are_legal(paths: torch.Tensor, trie: PrefixTrie) -> bool:

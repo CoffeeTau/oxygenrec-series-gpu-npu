@@ -438,7 +438,9 @@ class OxygenRECModel(nn.Module):
         """校验Teacher未来商品并展平为固定的SID token块``[B,3M]``。
 
         ``future_padding_mask=True``表示整个未来商品是padding。显式mask避免把
-        合法SID code 0误当成padding；被mask商品仍占固定位置但不会被后续token注意。
+        合法SID code 0误当成padding；被mask商品会先规范化成固定占位SID，再被
+        attention key mask隔离。固定占位很重要：Teacher用未来块末端位置预测首个
+        目标token，不能让调用方填入的任意padding内容改变该读出状态。
         """
         if future_sids is None:
             if future_padding_mask is not None:
@@ -471,8 +473,13 @@ class OxygenRECModel(nn.Module):
             raise ValueError("privileged_future_sids contains a code outside the SID vocabulary")
         future_sids = future_sids.to(device)
         future_padding_mask = future_padding_mask.to(device)
+        # padding位置既参与固定长度布局，又可能充当首token预测的query位置。
+        # 因此除了key mask，还必须把其输入embedding规范化为确定值。
+        canonical_future_sids = future_sids.masked_fill(
+            future_padding_mask.unsqueeze(-1), 0
+        )
         return (
-            future_sids.reshape(batch_size, -1),
+            canonical_future_sids.reshape(batch_size, -1),
             future_padding_mask.repeat_interleave(self.config.sid_levels, dim=1),
         )
 
