@@ -59,6 +59,40 @@ class NextItemSample:
             raise ValueError("history must be strictly earlier than the target")
 
 
+@dataclass(frozen=True)
+class ListwiseTargetSample:
+    """同一用户、日期和目标行为下的固定长度列表式训练样本。"""
+
+    split: Split
+    user_id: str
+    history: tuple[InteractionEvent, ...]
+    targets: tuple[InteractionEvent, ...]
+    utc_day: int
+
+    def __post_init__(self) -> None:
+        if not self.history:
+            raise ValueError("history must not be empty")
+        if not self.targets:
+            raise ValueError("targets must not be empty")
+        if any(event.user_id != self.user_id for event in self.history + self.targets):
+            raise ValueError("all events must belong to the sample user")
+        if len({event.item_id for event in self.targets}) != len(self.targets):
+            raise ValueError("listwise targets must contain distinct items")
+        behaviors = {event.behavior for event in self.targets}
+        if len(behaviors) != 1:
+            raise ValueError("one listwise sample must use one target behavior instruction")
+        first_target_time = min(event.timestamp_ms for event in self.targets)
+        if any(event.timestamp_ms >= first_target_time for event in self.history):
+            raise ValueError("history must be strictly earlier than every list target")
+        if any(event.timestamp_ms // 86_400_000 != self.utc_day for event in self.targets):
+            raise ValueError("all targets must belong to the declared UTC day")
+
+    @property
+    def target_behavior(self) -> Behavior:
+        """返回该列表共同使用的目标行为标签。"""
+        return self.targets[0].behavior
+
+
 def training_item_ids(
     events: Iterable[InteractionEvent], boundaries: TemporalBoundaries
 ) -> frozenset[str]:
@@ -168,6 +202,143 @@ def build_next_item_samples(
 
             history.extend(same_time_events)
             cursor = group_end
+
+    for split in Split:
+        samples.extend(reservoirs[split])
+    return samples
+
+
+def build_daily_listwise_samples(
+    events: Iterable[InteractionEvent],
+    boundaries: TemporalBoundaries,
+    *,
+    list_size: int,
+    target_behaviors: Sequence[Behavior] = (
+        Behavior.VIEW,
+        Behavior.ADD_TO_CART,
+        Behavior.TRANSACTION,
+    ),
+    min_history: int = 1,
+    max_history: int | None = None,
+    require_target_in_training_items: bool = True,
+    max_samples_per_split: Mapping[Split, int] | None = None,
+    sample_seed: int = 0,
+) -> list[ListwiseTargetSample]:
+    """构造公开数据代理的daily、行为同质列表式样本。
+
+    同一用户、UTC日和split内，同一商品若出现多种行为，只保留意图最强的
+    ``transaction > addtocart > view``。随后按行为分别排序，并把相邻目标组成
+    固定长度N的列表。每个列表使用首个目标之前的历史快照，因此列表内任何目标
+    都不会进入Encoder输入；不足N的尾部不会用padding伪造监督。
+
+    这是对论文私有daily日志协议的可审计代理，不声称还原其未公开分组细节。
+    """
+
+    if list_size < 1:
+        raise ValueError("list_size must be positive")
+    if min_history < 1:
+        raise ValueError("min_history must be at least 1")
+    if max_history is not None and max_history < min_history:
+        raise ValueError("max_history must be at least min_history")
+    limits = dict(max_samples_per_split or {})
+    if any(limit < 1 for limit in limits.values()):
+        raise ValueError("max_samples_per_split limits must be positive")
+
+    ordered_events = sorted(events)
+    train_items = training_item_ids(ordered_events, boundaries)
+    targets = frozenset(target_behaviors)
+    priority = {
+        Behavior.VIEW: 0,
+        Behavior.ADD_TO_CART: 1,
+        Behavior.TRANSACTION: 2,
+    }
+    by_user: dict[str, list[InteractionEvent]] = defaultdict(list)
+    for event in ordered_events:
+        by_user[event.user_id].append(event)
+
+    samples: list[ListwiseTargetSample] = []
+    reservoirs: dict[Split, list[ListwiseTargetSample]] = defaultdict(list)
+    seen_by_split: Counter[Split] = Counter()
+    generators = {
+        split: random.Random(sample_seed + index)
+        for index, split in enumerate(Split)
+    }
+
+    def keep(sample: ListwiseTargetSample) -> None:
+        """按split做确定性reservoir采样，避免只保留时间靠前的用户。"""
+        if sample.split not in limits:
+            samples.append(sample)
+            return
+        seen_by_split[sample.split] += 1
+        bucket = reservoirs[sample.split]
+        limit = limits[sample.split]
+        if len(bucket) < limit:
+            bucket.append(sample)
+            return
+        replacement = generators[sample.split].randrange(seen_by_split[sample.split])
+        if replacement < limit:
+            bucket[replacement] = sample
+
+    for user_id, user_events in sorted(by_user.items()):
+        history: list[InteractionEvent] = []
+        grouped: dict[
+            tuple[int, Split],
+            list[tuple[InteractionEvent, tuple[InteractionEvent, ...]]],
+        ] = defaultdict(list)
+        cursor = 0
+        while cursor < len(user_events):
+            timestamp = user_events[cursor].timestamp_ms
+            group_end = cursor + 1
+            while (
+                group_end < len(user_events)
+                and user_events[group_end].timestamp_ms == timestamp
+            ):
+                group_end += 1
+            same_time_events = user_events[cursor:group_end]
+            selected_history = history[-max_history:] if max_history else history
+            if len(selected_history) >= min_history:
+                snapshot = tuple(selected_history)
+                for target in same_time_events:
+                    if target.behavior not in targets:
+                        continue
+                    if require_target_in_training_items and target.item_id not in train_items:
+                        continue
+                    split = boundaries.split_for(target.timestamp_ms)
+                    day = target.timestamp_ms // 86_400_000
+                    grouped[(day, split)].append((target, snapshot))
+            # 同毫秒事件全部完成候选判断后才进入历史，保持无并列时序泄漏。
+            history.extend(same_time_events)
+            cursor = group_end
+
+        for (day, split), candidates in sorted(grouped.items()):
+            # 每个item只留当天最高意图事件；同级时保留时间更早的稳定代表。
+            best_by_item: dict[
+                str, tuple[InteractionEvent, tuple[InteractionEvent, ...]]
+            ] = {}
+            for candidate in candidates:
+                target, _ = candidate
+                previous = best_by_item.get(target.item_id)
+                if previous is None or priority[target.behavior] > priority[
+                    previous[0].behavior
+                ]:
+                    best_by_item[target.item_id] = candidate
+            by_behavior: dict[
+                Behavior, list[tuple[InteractionEvent, tuple[InteractionEvent, ...]]]
+            ] = defaultdict(list)
+            for candidate in best_by_item.values():
+                by_behavior[candidate[0].behavior].append(candidate)
+            for behavior in sorted(by_behavior, key=lambda item: priority[item]):
+                rows = sorted(by_behavior[behavior], key=lambda item: item[0])
+                for start in range(0, len(rows) - list_size + 1, list_size):
+                    chunk = rows[start : start + list_size]
+                    first_history = chunk[0][1]
+                    keep(ListwiseTargetSample(
+                        split=split,
+                        user_id=user_id,
+                        history=first_history,
+                        targets=tuple(target for target, _ in chunk),
+                        utc_day=day,
+                    ))
 
     for split in Split:
         samples.extend(reservoirs[split])

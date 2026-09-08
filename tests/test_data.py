@@ -11,6 +11,7 @@ from oxygenrec.data import (
     InteractionEvent,
     Split,
     TemporalBoundaries,
+    build_daily_listwise_samples,
     build_next_item_samples,
     load_retailrocket_events,
     training_item_ids,
@@ -121,6 +122,53 @@ class TemporalSamplesTest(unittest.TestCase):
         )
         self.assertEqual(len(first), 3)
         self.assertEqual(first, second)
+
+    def test_daily_listwise_uses_strongest_behavior_and_no_future_history(self):
+        day = 86_400_000
+        boundaries = TemporalBoundaries(train_end_ms=day * 2, validation_end_ms=day * 3)
+        events = [
+            event(day + 1, 1, "u1", "context"),
+            event(day + 2, 2, "u1", "x", Behavior.VIEW),
+            event(day + 3, 3, "u1", "x", Behavior.ADD_TO_CART),
+            event(day + 4, 4, "u1", "x", Behavior.TRANSACTION),
+            event(day + 5, 5, "u1", "y", Behavior.TRANSACTION),
+            event(day + 6, 6, "u1", "c1", Behavior.ADD_TO_CART),
+            event(day + 7, 7, "u1", "c2", Behavior.ADD_TO_CART),
+            event(day + 8, 8, "u1", "z", Behavior.VIEW),
+            event(day + 9, 9, "u1", "w", Behavior.VIEW),
+        ]
+        samples = build_daily_listwise_samples(
+            events, boundaries, list_size=2, max_history=4
+        )
+
+        self.assertEqual(len(samples), 3)
+        by_behavior = {sample.target_behavior: sample for sample in samples}
+        cart = by_behavior[Behavior.ADD_TO_CART]
+        self.assertEqual([target.item_id for target in cart.targets], ["c1", "c2"])
+        self.assertTrue(all(target.behavior is Behavior.ADD_TO_CART for target in cart.targets))
+        self.assertTrue(all(
+            history.timestamp_ms < min(target.timestamp_ms for target in cart.targets)
+            for history in cart.history
+        ))
+        views = by_behavior[Behavior.VIEW]
+        self.assertEqual([target.item_id for target in views.targets], ["z", "w"])
+        transactions = by_behavior[Behavior.TRANSACTION]
+        self.assertEqual(
+            [target.item_id for target in transactions.targets], ["x", "y"]
+        )
+
+    def test_daily_listwise_drops_incomplete_tail_without_padding_targets(self):
+        day = 86_400_000
+        boundaries = TemporalBoundaries(train_end_ms=day * 2, validation_end_ms=day * 3)
+        events = [
+            event(day + 1, 1, "u1", "context"),
+            event(day + 2, 2, "u1", "a"),
+            event(day + 3, 3, "u1", "b"),
+            event(day + 4, 4, "u1", "c"),
+        ]
+        samples = build_daily_listwise_samples(events, boundaries, list_size=2)
+        self.assertEqual(len(samples), 1)
+        self.assertEqual([target.item_id for target in samples[0].targets], ["a", "b"])
 
 
 if __name__ == "__main__":

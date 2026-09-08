@@ -5,8 +5,12 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from oxygenrec.data.events import Behavior, InteractionEvent
-from oxygenrec.data.model_inputs import build_long_short_sid_model_batch, build_sid_model_batch
-from oxygenrec.data.temporal import NextItemSample, Split
+from oxygenrec.data.model_inputs import (
+    build_listwise_sid_model_batch,
+    build_long_short_sid_model_batch,
+    build_sid_model_batch,
+)
+from oxygenrec.data.temporal import ListwiseTargetSample, NextItemSample, Split
 from oxygenrec.sid import SIDRegistry
 
 
@@ -76,3 +80,29 @@ class SIDModelBatchTest(unittest.TestCase):
                 [sample], self.registry, short_history_items=2,
                 long_history_items=3, minimum_long_history_items=1,
             )
+
+    def test_maps_listwise_targets_and_common_behavior_instruction(self):
+        day = 86_400_000
+        targets = (
+            InteractionEvent(day + 3, 3, "user", "b", Behavior.ADD_TO_CART),
+            InteractionEvent(day + 4, 4, "user", "target", Behavior.ADD_TO_CART),
+        )
+        sample = ListwiseTargetSample(
+            Split.TRAIN,
+            "user",
+            (event(day + 1, 1, "a"),),
+            targets,
+            1,
+        )
+        batch = build_listwise_sid_model_batch(
+            [sample], self.registry, max_history_items=2
+        )
+        self.assertEqual(
+            batch.history_sids,
+            (((0, 0, 0), (1, 2, 3)),),
+        )
+        self.assertEqual(
+            batch.target_sids,
+            (((4, 5, 6), (7, 8, 9)),),
+        )
+        self.assertEqual(batch.target_behavior_ids, (1,))

@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Sequence
 
 from ..sid import SIDRegistry
-from .temporal import NextItemSample
+from .temporal import ListwiseTargetSample, NextItemSample
 
 
 @dataclass(frozen=True)
@@ -32,6 +32,17 @@ class LongShortSIDModelBatch:
     target_sids: tuple[tuple[int, ...], ...]
     target_behavior_ids: tuple[int, ...]
     scenario_ids: tuple[int, ...]
+
+
+@dataclass(frozen=True)
+class ListwiseSIDModelBatch:
+    """v2列表批次：history=[B,T,L]、targets=[B,N,L]。"""
+
+    history_sids: tuple[tuple[tuple[int, ...], ...], ...]
+    history_padding_mask: tuple[tuple[bool, ...], ...]
+    history_behavior_ids: tuple[tuple[int, ...], ...]
+    target_sids: tuple[tuple[tuple[int, ...], ...], ...]
+    target_behavior_ids: tuple[int, ...]
 
 
 def build_sid_model_batch(
@@ -89,6 +100,73 @@ def build_sid_model_batch(
         padding_masks.append((True,) * padding + (False,) * len(history))
         padded_behaviors.append((0,) * padding + behaviors)
     return SIDModelBatch(
+        history_sids=tuple(padded_history),
+        history_padding_mask=tuple(padding_masks),
+        history_behavior_ids=tuple(padded_behaviors),
+        target_sids=tuple(targets),
+        target_behavior_ids=tuple(target_behaviors),
+    )
+
+
+def build_listwise_sid_model_batch(
+    samples: Sequence[ListwiseTargetSample],
+    registry: SIDRegistry,
+    *,
+    max_history_items: int,
+) -> ListwiseSIDModelBatch:
+    """把行为同质列表映射为SID，并把历史在左侧补齐到T。"""
+
+    if not samples:
+        raise ValueError("samples must not be empty")
+    if max_history_items < 1:
+        raise ValueError("max_history_items must be positive")
+    list_sizes = {len(sample.targets) for sample in samples}
+    if len(list_sizes) != 1:
+        raise ValueError("all listwise samples in a batch must share list size N")
+
+    behavior_id = {"view": 0, "addtocart": 1, "transaction": 2}
+    histories: list[tuple[tuple[int, ...], ...]] = []
+    history_behaviors: list[tuple[int, ...]] = []
+    targets: list[tuple[tuple[int, ...], ...]] = []
+    target_behaviors: list[int] = []
+    for sample in samples:
+        unknown_targets = [
+            target.item_id
+            for target in sample.targets
+            if target.item_id not in registry.item_to_sid
+        ]
+        if unknown_targets:
+            raise ValueError(
+                f"target items are absent from SID registry: {unknown_targets[:3]}"
+            )
+        known_events = [
+            event for event in sample.history if event.item_id in registry.item_to_sid
+        ][-max_history_items:]
+        if not known_events:
+            raise ValueError(
+                f"sample for user {sample.user_id!r} has no known history items"
+            )
+        histories.append(tuple(
+            registry.sid_for(event.item_id).codes for event in known_events
+        ))
+        history_behaviors.append(tuple(
+            behavior_id[event.behavior.value] for event in known_events
+        ))
+        targets.append(tuple(
+            registry.sid_for(target.item_id).codes for target in sample.targets
+        ))
+        target_behaviors.append(behavior_id[sample.target_behavior.value])
+
+    pad_sid = (0,) * registry.levels
+    padded_history: list[tuple[tuple[int, ...], ...]] = []
+    padding_masks: list[tuple[bool, ...]] = []
+    padded_behaviors: list[tuple[int, ...]] = []
+    for history, behaviors in zip(histories, history_behaviors, strict=True):
+        padding = max_history_items - len(history)
+        padded_history.append((pad_sid,) * padding + history)
+        padding_masks.append((True,) * padding + (False,) * len(history))
+        padded_behaviors.append((0,) * padding + behaviors)
+    return ListwiseSIDModelBatch(
         history_sids=tuple(padded_history),
         history_padding_mask=tuple(padding_masks),
         history_behavior_ids=tuple(padded_behaviors),
