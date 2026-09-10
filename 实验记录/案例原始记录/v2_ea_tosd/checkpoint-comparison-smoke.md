@@ -13,7 +13,7 @@
 ```text
 stage=load_paired_checkpoints
 stage=build_paired_validation_cohort
-OK device=cuda variant=v2_ea_vs_sft_checkpoint_readonly validation=32 changed_tensors=80/96 parameter_mean_abs=9.463138810e-07 parameter_max_abs=9.970739484e-05 parameter_relative_l2=1.008905248e-05 logit_mean_abs=2.572369801e-04 logit_max_abs=8.354246616e-03 symmetric_kl=1.591029388e-07 gold_logprob_delta=-3.282229106e-05 teacher_argmax_change=0.005208 greedy_token_change=0.026042 greedy_list_change=0.062500 ea_only_hits=0 sft_only_hits=0 report=outputs/review/v2_ea_tosd_checkpoint_comparison/checkpoint_comparison.md read_only=True external_reward_model=False
+OK device=cuda variant=v2_ea_vs_sft_checkpoint_readonly validation=32 changed_tensors=80/96 parameter_mean_abs=9.463138810e-07 parameter_max_abs=9.970739484e-05 parameter_relative_l2=1.008905248e-05 logit_mean_abs=2.572369801e-04 logit_max_abs=8.354246616e-03 symmetric_kl=1.591029388e-07 gold_logprob_delta=-3.282229106e-05 teacher_argmax_change=0.005208 greedy_token_change=0.026042 greedy_list_change=0.062500 ea_only_hits=0 sft_only_hits=0 review_cases=5 report=outputs/review/v2_ea_tosd_checkpoint_comparison/checkpoint_comparison.md read_only=True external_reward_model=False
 ```
 
 ## 截图中的非错误提示
@@ -24,7 +24,11 @@ UserWarning: enable_nested_tensor is True, but self.use_nested_tensor is False b
 
 该提示只表示未启用nested-tensor性能优化路径。
 
-## 转录缺口
+## 代表案例源记录
 
 - 截图未展示`checkpoint_comparison.md`中的最大差异参数列表。
-- 当前版本尚未导出发生greedy变化的两条逐样本案例。
+- [`checkpoint-diff-review-001`](checkpoint-diff-review-001.md)：第一条greedy变化列表。
+- [`checkpoint-diff-review-002`](checkpoint-diff-review-002.md)：EA gold log-prob增益最大。
+- [`checkpoint-diff-review-003`](checkpoint-diff-review-003.md)：EA gold log-prob下降最大。
+- [`checkpoint-diff-review-004`](checkpoint-diff-review-004.md)：最大logit差。
+- [`checkpoint-diff-review-005`](checkpoint-diff-review-005.md)：第二条greedy变化列表。

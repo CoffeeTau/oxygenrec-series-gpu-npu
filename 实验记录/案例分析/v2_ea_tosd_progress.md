@@ -12,6 +12,11 @@
 - [`ea-tosd-review-003`](../案例原始记录/v2_ea_tosd/ea-tosd-review-003.md)：最大privilege gap；
 - [`ea-tosd-review-004`](../案例原始记录/v2_ea_tosd/ea-tosd-review-004.md)：稀有transaction；
 - [`ea-tosd-review-005`](../案例原始记录/v2_ea_tosd/ea-tosd-review-005.md)：非零reward。
+- [`checkpoint-diff-review-001`](../案例原始记录/v2_ea_tosd/checkpoint-diff-review-001.md)：第一条greedy变化列表；
+- [`checkpoint-diff-review-002`](../案例原始记录/v2_ea_tosd/checkpoint-diff-review-002.md)：EA gold log-prob增益最大；
+- [`checkpoint-diff-review-003`](../案例原始记录/v2_ea_tosd/checkpoint-diff-review-003.md)：EA gold log-prob下降最大；
+- [`checkpoint-diff-review-004`](../案例原始记录/v2_ea_tosd/checkpoint-diff-review-004.md)：最大logit差；
+- [`checkpoint-diff-review-005`](../案例原始记录/v2_ea_tosd/checkpoint-diff-review-005.md)：第二条greedy变化列表。
 
 ## 2026-09-10：真实future-prefix CUDA smoke
 
@@ -115,5 +120,37 @@ validation logits、token argmax和greedy列表，而不是仅凭相同命中率
 `3.282229106e-05`，幅度很小，但方向不是正向收益。
 
 因此当前最准确的结论是：EA-TOSD附加目标已经生效并改变连续策略，也改变了少量
-最终列表；只是本轮变化没有向真实目标移动。接下来需要查看两条greedy变化案例，
-判断它们发生在SID第几层、是否保持完整合法SID、以及是否只是两个错误候选之间切换。
+最终列表；只是本轮变化没有向真实目标移动。
+
+## checkpoint差异代表案例分析
+
+五个固定角色案例把连续变化与离散输出的关系进一步拆开：
+
+- `checkpoint-diff-review-001`：EA把第一项从SFT的`[97,214,219]`改成
+  `[217,119,241]`，三个SID层级全部变化；第二项不变。两边六个token都没有命中
+  gold，EA平均gold log-prob反而下降`2.1843e-4`。SFT原列表的两个商品SID完全
+  重复，EA在此例消除了重复，但这不是目标命中收益。
+- `checkpoint-diff-review-005`：EA只改变第二个商品的第1/3层token，把SFT的
+  `[97,214,219]`改成与首项相同的`[217,214,164]`。六个token仍均未命中，尽管
+  EA平均gold log-prob上升`3.3911e-4`。也就是说，连续概率向gold移动并不保证
+  greedy列表立刻改善，本例甚至产生了重复商品SID。
+- `checkpoint-diff-review-002/003`分别给出最大gold概率增益`+3.6478e-4`和最大
+  下降`-2.6981e-4`，但两例EA/SFT greedy输出和teacher-forcing argmax都不变。
+  这说明大部分EA更新仍停留在决策边界以内，并且在held-out样本上的方向有正有负。
+- `checkpoint-diff-review-004`的单步最大logit差为`8.3542e-3`，仍未改变argmax或
+  greedy结果，是“连续策略已变、离散输出未变”的典型样本。
+
+`checkpoint-diff-review-001`只有teacher-forcing第一个argmax变化，但自回归第一项
+三个token全部变化；`checkpoint-diff-review-005`则teacher-forcing argmax全不变，
+greedy第二项仍变化。这不矛盾：teacher forcing沿真实target prefix比较，greedy沿
+模型自己生成的prefix递推，小幅参数变化可能在两种前缀路径上跨过不同决策边界。
+
+五例的`EA/SFT生成SID均合法=True/True`只表示每个三层SID都在PrefixTrie中，不能
+推出列表内商品唯一。当前`generate()`按商品重置Trie但不屏蔽前面已经生成的完整SID；
+论文公开方法未明确给出列表去重规则，因此不把它补写成论文组件。它应作为公开代理
+实现边界保留，并在后续预训练配对中同时报告生成列表唯一率，避免只看token合法率。
+
+综上，EA-TOSD的真实future、Teacher/Student、best-of-G、几何reward、熵门、SFT
+anchor、反向更新、配对控制和最终策略变化均已有CUDA及案例证据，可以关闭为
+`[完成-方法级GPU复现]`。该状态不表示EA优于SFT：32条smoke没有目标命中增益，
+也没有多seed或独立test上的稳定收益证据。
