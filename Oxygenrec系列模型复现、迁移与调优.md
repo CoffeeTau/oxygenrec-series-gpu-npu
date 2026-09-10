@@ -33,6 +33,6 @@ Decoder → 生成多个商品 SID
 | --------------------------------------- | ---- | ----- | --- |
 | Behavior Instruction（Decoder 端行为指令）     | 已完成CUDA方法验证 | 保留行为token、两层投影、`[BOS,I_s,I_r,I_b]`及全部解码接口 | 具体首次CUDA数值未留存；真实列表已接通 |
 | Behavior-aware Pretraining（行为感知的列表式预训练） | 真实数据CUDA smoke通过 | 目标行为ID、`1.2/1.5/2.0`权重、`[B,N,3]→[B,3N]`解码、真实daily行为同质列表及代表案例 | 欠充分训练，尚未完成PT-only收益对照 |
-| EA-TOSD（熵感知的轨迹优化自蒸馏）                    | 真实公开数据代理CUDA贯通，配对归因中 | 几何reward、best-of-G、未来SID共享Teacher、双熵蒸馏、SFT anchor、同split真实future与checkpoint迁移 | 28.125%样本非零reward；五个正反案例已review，单步token指标略降，SFT-only配对对照待CUDA，尚无收益结论 |
+| EA-TOSD（熵感知的轨迹优化自蒸馏）                    | 真实公开数据代理CUDA贯通，连续差异诊断中 | 几何reward、best-of-G、未来SID共享Teacher、双熵蒸馏、SFT anchor、同split真实future与checkpoint迁移 | 28.125%样本非零reward；五个正反案例已review；SFT-only与EA单步离散指标相同，待参数/logit差异，尚无收益结论 |
 
 # NPU侧Oxygenrec-series迁移与调优

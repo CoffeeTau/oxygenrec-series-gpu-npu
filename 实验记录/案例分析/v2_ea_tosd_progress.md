@@ -2,6 +2,7 @@
 
 > 主日志：[`复现实验日志.md`](../复现实验日志.md)  
 > 本轮原始案例：[`ea-tosd-review-005`](../案例原始记录/v2_ea_tosd/ea-tosd-review-005.md)
+> 配对终端记录：[`sft-only-paired-smoke`](../案例原始记录/v2_ea_tosd/sft-only-paired-smoke.md)
 
 原始案例索引：
 
@@ -75,13 +76,26 @@ Teacher在第一步给出的privilege advantage为0.284111，和future/gold/cand
 粗粒度前缀的现象相符；但这只是SID层级第一token命中，不是完整SID命中，更不能
 表述成商品级推荐成功。
 
-## 下一验收：SFT-only配对对照
+## SFT-only配对对照结果
 
-`scripts/train_v2_sft_control_retailrocket.py`从相同listwise checkpoint重建完全相同
-的future-eligible训练/验证cohort，使用相同seed、batch、epoch和learning rate，
-但反向目标只保留behavior-weighted SFT。它会先断言训练前的SID recall、token
-accuracy和geometric reward与EA结果逐值一致，再输出更新前、SFT-only后、EA后
-三点比较。
+`scripts/train_v2_sft_control_retailrocket.py`已在CUDA服务器运行，训练前一致性断言
+`paired_before_match=True`。两个分支使用相同listwise checkpoint、完全相同的
+future-eligible训练/验证cohort、seed、batch、epoch和learning rate，差别仅在
+SFT-only分支不加入EA-TOSD目标。
 
-该对照只能回答当前smoke中的下降主要来自共享SFT续训，还是EA-TOSD附加目标；
-由于仍是32样本单epoch，它不能替代后续多seed、足量训练和独立test split评测。
+| 指标 | 更新前 | SFT-only后 | EA-TOSD后 | EA-SFT |
+|---|---:|---:|---:|---:|
+| exact SID recall | 0.000000 | 0.000000 | 0.000000 | 0.000000 |
+| SID token accuracy | 0.046875 | 0.041667 | 0.041667 | 0.000000 |
+| geometric token reward | 0.047030 | 0.041628 | 0.041628 | 0.000000 |
+
+因此，E119的轻微下降不能归因于EA-TOSD附加目标：只运行共同的behavior-weighted
+SFT也得到同样的离散结果。当前更合理的解释是共享SFT更新与32条验证样本的离散
+波动共同作用。
+
+但两组相同的SID指标不表示模型参数相同。EA分支最大共享梯度为`878.134954`，
+SFT-only为`872.898237`；口径相同但数值不同，提示EA附加项可能改变了连续更新，
+只是没有改变当前greedy输出的命中关系。下一步应直接比较两份checkpoint的参数、
+validation logits、token argmax和greedy列表，而不是仅凭相同命中率判断EA“没有作用”。
+
+该配对仍只有32样本、单epoch，不能替代多seed、充分训练和独立test split评测。
