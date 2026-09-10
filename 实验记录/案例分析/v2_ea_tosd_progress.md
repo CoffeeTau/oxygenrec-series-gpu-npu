@@ -3,6 +3,7 @@
 > 主日志：[`复现实验日志.md`](../复现实验日志.md)  
 > 本轮原始案例：[`ea-tosd-review-005`](../案例原始记录/v2_ea_tosd/ea-tosd-review-005.md)
 > 配对终端记录：[`sft-only-paired-smoke`](../案例原始记录/v2_ea_tosd/sft-only-paired-smoke.md)
+> checkpoint比较记录：[`checkpoint-comparison-smoke`](../案例原始记录/v2_ea_tosd/checkpoint-comparison-smoke.md)
 
 原始案例索引：
 
@@ -99,3 +100,20 @@ SFT-only为`872.898237`；口径相同但数值不同，提示EA附加项可能�
 validation logits、token argmax和greedy列表，而不是仅凭相同命中率判断EA“没有作用”。
 
 该配对仍只有32样本、单epoch，不能替代多seed、充分训练和独立test split评测。
+
+## EA与SFT checkpoint连续差异
+
+只读比较确认两条分支并非相同模型：96个浮点参数张量中80个发生变化，参数平均
+绝对差为`9.463138810e-07`、最大差为`9.970739484e-05`、相对L2为
+`1.008905248e-05`。对应validation logits的平均绝对差为`2.572369801e-04`，
+最大差为`8.354246616e-03`，平均对称KL为`1.591029388e-07`。
+
+这些连续变化已经跨过少量决策边界：teacher-forcing的192个token中有1个argmax
+不同；constrained greedy的192个token中有5个不同，涉及32条列表中的2条。但
+`ea_only_hits=0`、`sft_only_hits=0`，说明这些变化都发生在非目标预测之间，没有
+增加或减少目标token命中。EA相对SFT的平均gold log-prob还下降了
+`3.282229106e-05`，幅度很小，但方向不是正向收益。
+
+因此当前最准确的结论是：EA-TOSD附加目标已经生效并改变连续策略，也改变了少量
+最终列表；只是本轮变化没有向真实目标移动。接下来需要查看两条greedy变化案例，
+判断它们发生在SID第几层、是否保持完整合法SID、以及是否只是两个错误候选之间切换。

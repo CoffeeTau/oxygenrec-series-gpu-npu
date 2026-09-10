@@ -24,7 +24,7 @@ from oxygenrec.data import (
 from oxygenrec.model import OxygenRECConfig, OxygenRECModel
 from oxygenrec.sid import PrefixTrie, SIDRegistry
 from train_v2_ea_tosd_retailrocket import BEHAVIOR_BY_NAME, common_inputs, make_batch
-from train_v2_listwise_retailrocket import chunks
+from train_v2_listwise_retailrocket import chunks, sid_chunks
 
 
 def parse_args() -> argparse.Namespace:
@@ -134,12 +134,13 @@ def compare_models(
     trie,
     args,
     device,
-) -> dict:
+) -> tuple[dict, list[dict]]:
     """在同一部署输入上比较连续logits与最终约束生成。"""
     ea_model.eval()
     sft_model.eval()
     totals = Counter()
     sums = Counter()
+    rows = []
     maximum_logit_delta = 0.0
     with torch.no_grad():
         for sample_batch in chunks(samples, args.batch_size):
@@ -161,6 +162,13 @@ def compare_models(
                 (ea_probs * (ea_log_probs - sft_log_probs)).sum(dim=-1)
                 + (sft_probs * (sft_log_probs - ea_log_probs)).sum(dim=-1)
             )
+            teacher_argmax_changes = ea_logits.argmax(dim=-1).ne(
+                sft_logits.argmax(dim=-1)
+            )
+            gold_log_prob_delta = (
+                ea_log_probs.gather(2, flat_targets.unsqueeze(-1)).squeeze(-1)
+                - sft_log_probs.gather(2, flat_targets.unsqueeze(-1)).squeeze(-1)
+            )
             token_count = flat_targets.numel()
             sums.update({
                 "absolute_logit_delta": float(difference.abs().sum().item()),
@@ -180,7 +188,7 @@ def compare_models(
                 "tokens": token_count,
                 "logit_elements": difference.numel(),
                 "teacher_forcing_argmax_changes": int(
-                    ea_logits.argmax(dim=-1).ne(sft_logits.argmax(dim=-1)).sum().item()
+                    teacher_argmax_changes.sum().item()
                 ),
             })
 
@@ -210,9 +218,65 @@ def compare_models(
                 "sft_only_target_token_hits": int((sft_hits & ~ea_hits).sum().item()),
             })
 
+            difference_rows = difference.abs().cpu()
+            symmetric_kl_rows = symmetric_kl.cpu()
+            gold_delta_rows = gold_log_prob_delta.cpu()
+            teacher_change_rows = teacher_argmax_changes.cpu().tolist()
+            target_rows = flat_targets.cpu().tolist()
+            ea_rows = ea_generated.cpu().tolist()
+            sft_rows = sft_generated.cpu().tolist()
+            greedy_change_rows = token_changes.cpu().tolist()
+            ea_hit_rows = ea_hits.cpu().tolist()
+            sft_hit_rows = sft_hits.cpu().tolist()
+            for sample, target, ea_path, sft_path, greedy_changes, ea_token_hits, \
+                    sft_token_hits, teacher_changes, sample_delta, sample_kl, \
+                    sample_gold_delta in zip(
+                        sample_batch,
+                        target_rows,
+                        ea_rows,
+                        sft_rows,
+                        greedy_change_rows,
+                        ea_hit_rows,
+                        sft_hit_rows,
+                        teacher_change_rows,
+                        difference_rows,
+                        symmetric_kl_rows,
+                        gold_delta_rows,
+                        strict=True,
+                    ):
+                rows.append({
+                    "behavior": sample.target_behavior.value,
+                    "history_length": len(sample.history),
+                    "history_behavior_counts": dict(sorted(Counter(
+                        event.behavior.value for event in sample.history
+                    ).items())),
+                    "target_sids": sid_chunks(target, registry.levels),
+                    "ea_generated_sids": sid_chunks(ea_path, registry.levels),
+                    "sft_generated_sids": sid_chunks(sft_path, registry.levels),
+                    "greedy_token_change_mask": greedy_changes,
+                    "ea_target_token_hits": ea_token_hits,
+                    "sft_target_token_hits": sft_token_hits,
+                    "teacher_forcing_argmax_change_mask": teacher_changes,
+                    "token_max_abs_logit_delta": sample_delta.amax(dim=-1).tolist(),
+                    "mean_abs_logit_delta": float(sample_delta.mean().item()),
+                    "max_abs_logit_delta": float(sample_delta.max().item()),
+                    "mean_symmetric_kl": float(sample_kl.mean().item()),
+                    "token_gold_log_prob_delta": sample_gold_delta.tolist(),
+                    "mean_gold_log_prob_delta": float(sample_gold_delta.mean().item()),
+                    "ea_all_generated_items_legal": all(
+                        trie.contains(item)
+                        for item in sid_chunks(ea_path, registry.levels)
+                    ),
+                    "sft_all_generated_items_legal": all(
+                        trie.contains(item)
+                        for item in sid_chunks(sft_path, registry.levels)
+                    ),
+                    "greedy_list_changed": any(greedy_changes),
+                })
+
     if not totals["samples"]:
         raise RuntimeError("validation produced no comparison rows")
-    return {
+    metrics = {
         "samples": totals["samples"],
         "tokens": totals["tokens"],
         "mean_abs_logit_delta": (
@@ -237,17 +301,66 @@ def compare_models(
         "ea_only_target_token_hits": totals["ea_only_target_token_hits"],
         "sft_only_target_token_hits": totals["sft_only_target_token_hits"],
     }
+    return metrics, rows
 
 
-def write_report(output_dir: Path, summary: dict) -> None:
+def select_review_rows(rows: list[dict]) -> tuple[list[dict], dict]:
+    """固定覆盖所有greedy变化以及连续差异的三个极值角色。"""
+    selected_by_index: dict[int, dict] = {}
+    changed_indices = [
+        index for index, row in enumerate(rows) if row["greedy_list_changed"]
+    ]
+    for index in changed_indices:
+        selected_by_index[index] = {**rows[index], "roles": ["greedy_changed"]}
+
+    role_specs = (
+        ("largest_logit_delta", "max_abs_logit_delta", True),
+        ("largest_ea_gold_gain", "mean_gold_log_prob_delta", True),
+        ("largest_ea_gold_drop", "mean_gold_log_prob_delta", False),
+    )
+    role_indices = {}
+    for role, key, maximize in role_specs:
+        index = max(
+            range(len(rows)),
+            key=lambda item: rows[item][key] if maximize else -rows[item][key],
+        )
+        selected_by_index.setdefault(index, {**rows[index], "roles": []})[
+            "roles"
+        ].append(role)
+        role_indices[role] = index
+
+    selected = []
+    case_by_index = {}
+    for number, (index, row) in enumerate(sorted(selected_by_index.items()), start=1):
+        case_id = f"checkpoint-diff-review-{number:03d}"
+        selected.append({"case_id": case_id, **row})
+        case_by_index[index] = case_id
+    coverage = {
+        "greedy_changed": [case_by_index[index] for index in changed_indices],
+        **{role: case_by_index[index] for role, index in role_indices.items()},
+    }
+    return selected, coverage
+
+
+def write_report(output_dir: Path, summary: dict, rows: list[dict]) -> dict:
     """保存连续差异诊断及其解释边界。"""
     output_dir.mkdir(parents=True, exist_ok=True)
+    selected, coverage = select_review_rows(rows)
+    summary = {
+        **summary,
+        "coverage": coverage,
+        "representative_cases": len(selected),
+    }
     (output_dir / "checkpoint_comparison.json").write_text(
         json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
     parameters = summary["parameter_delta"]
     behavior = summary["behavior_delta"]
+    (output_dir / "checkpoint_comparison_cases.jsonl").write_text(
+        "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in selected),
+        encoding="utf-8",
+    )
     lines = [
         "# OxygenREC-v2 EA-TOSD / SFT-only checkpoint差异",
         "",
@@ -277,10 +390,44 @@ def write_report(output_dir: Path, summary: dict) -> None:
         "- 参数差异接近数值零：再检查附加loss权重、门控和梯度贡献。",
         "- 任一种情况都不能由本smoke推出EA-TOSD有稳定质量收益。",
         "",
+        "## 固定规则代表案例",
+        "",
+        f"- 角色覆盖：`{json.dumps(coverage, ensure_ascii=False, sort_keys=True)}`",
+        "",
     ]
+    for row in selected:
+        lines.extend([
+            f"### {row['case_id']}",
+            "",
+            f"- 代表角色：`{row['roles']}`",
+            f"- 目标行为：`{row['behavior']}`",
+            f"- 历史长度/行为：{row['history_length']} / `{row['history_behavior_counts']}`",
+            f"- 目标SID列表：`{row['target_sids']}`",
+            f"- EA生成：`{row['ea_generated_sids']}`",
+            f"- SFT生成：`{row['sft_generated_sids']}`",
+            f"- greedy token变化mask：`{row['greedy_token_change_mask']}`",
+            f"- EA目标token命中：`{row['ea_target_token_hits']}`",
+            f"- SFT目标token命中：`{row['sft_target_token_hits']}`",
+            f"- teacher-forcing argmax变化mask：`{row['teacher_forcing_argmax_change_mask']}`",
+            f"- 每步最大logit差：`{row['token_max_abs_logit_delta']}`",
+            f"- mean/max logit差：{row['mean_abs_logit_delta']:.9e} / {row['max_abs_logit_delta']:.9e}",
+            f"- mean symmetric KL：{row['mean_symmetric_kl']:.9e}",
+            f"- 每步EA-SFT gold log-prob：`{row['token_gold_log_prob_delta']}`",
+            f"- mean EA-SFT gold log-prob：{row['mean_gold_log_prob_delta']:+.9e}",
+            f"- EA/SFT生成SID均合法：`{row['ea_all_generated_items_legal']}` / `{row['sft_all_generated_items_legal']}`",
+            "",
+            "#### 人工Review",
+            "",
+            "- [ ] 变化发生的SID层级能由token mask定位",
+            "- [ ] EA与SFT生成均为PrefixTrie中的合法完整SID",
+            "- [ ] 变化是向目标靠近、远离，还是两个错误SID之间切换",
+            "- [ ] 未把小样本策略变化写成推荐质量收益",
+            "",
+        ])
     (output_dir / "checkpoint_comparison.md").write_text(
         "\n".join(lines), encoding="utf-8"
     )
+    return coverage
 
 
 def main() -> None:
@@ -359,7 +506,7 @@ def main() -> None:
     if len(validation) != args.max_validation_samples:
         raise RuntimeError("paired validation cohort does not have the requested size")
     trie = PrefixTrie.from_registry(registry)
-    behavior = compare_models(
+    behavior, review_rows = compare_models(
         ea_model, sft_model, validation, registry, trie, args, device
     )
     summary = {
@@ -370,7 +517,12 @@ def main() -> None:
         "external_reward_model": False,
         "read_only": True,
     }
-    write_report(args.output_dir, summary)
+    coverage = write_report(args.output_dir, summary, review_rows)
+    review_case_count = len({
+        case_id
+        for covered in coverage.values()
+        for case_id in (covered if isinstance(covered, list) else [covered])
+    })
     print(
         "OK "
         f"device={device.type} variant=v2_ea_vs_sft_checkpoint_readonly "
@@ -389,6 +541,7 @@ def main() -> None:
         f"greedy_list_change={behavior['greedy_list_change_rate']:.6f} "
         f"ea_only_hits={behavior['ea_only_target_token_hits']} "
         f"sft_only_hits={behavior['sft_only_target_token_hits']} "
+        f"review_cases={review_case_count} "
         f"report={args.output_dir / 'checkpoint_comparison.md'} "
         "read_only=True external_reward_model=False"
     )
