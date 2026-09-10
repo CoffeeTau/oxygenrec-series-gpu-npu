@@ -21,6 +21,42 @@ class RankingMetrics:
     ndcg: float
 
 
+@dataclass(frozen=True)
+class SIDTokenMatch:
+    """展开SID轨迹的逐token命中结果，与EA-TOSD可验reward口径一致。"""
+
+    hits: tuple[bool, ...]
+    accuracy: float
+    geometric_reward: float
+
+
+def evaluate_sid_token_match(
+    prediction: Sequence[int],
+    target: Sequence[int],
+    *,
+    geometric_decay: float = 0.9,
+) -> SIDTokenMatch:
+    """计算逐token准确率与归一化几何衰减命中reward。
+
+    这是完整SID/item命中之外的敏感诊断；它不等价于商品命中，
+    不能用来替代SID recall或工业推荐指标。
+    """
+    if not prediction or len(prediction) != len(target):
+        raise ValueError("prediction and target must have the same positive length")
+    if not 0.0 <= geometric_decay <= 1.0:
+        raise ValueError("geometric_decay must be in [0, 1]")
+    hits = tuple(left == right for left, right in zip(prediction, target, strict=True))
+    weights = tuple(geometric_decay ** index for index in range(len(hits)))
+    weight_sum = sum(weights)
+    return SIDTokenMatch(
+        hits=hits,
+        accuracy=sum(hits) / len(hits),
+        geometric_reward=sum(
+            weight for hit, weight in zip(hits, weights, strict=True) if hit
+        ) / weight_sum,
+    )
+
+
 def evaluate_sid_ranking(
     predictions: Sequence[Sequence[Sequence[int]]],
     target_item_ids: Sequence[str],

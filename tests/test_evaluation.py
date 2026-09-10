@@ -4,7 +4,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from oxygenrec.evaluation import evaluate_sid_ranking
+from oxygenrec.evaluation import evaluate_sid_ranking, evaluate_sid_token_match
 from oxygenrec.sid import SIDRegistry
 
 
@@ -47,3 +47,17 @@ class RankingMetricsTest(unittest.TestCase):
             evaluate_sid_ranking(
                 [[(1, 2, 3)]], ["a"], self.registry, ks=(1, 2)
             )
+
+    def test_token_match_uses_normalized_geometric_reward(self):
+        match = evaluate_sid_token_match(
+            [1, 9, 3], [1, 2, 3], geometric_decay=0.5
+        )
+        self.assertEqual(match.hits, (True, False, True))
+        self.assertAlmostEqual(match.accuracy, 2 / 3)
+        self.assertAlmostEqual(match.geometric_reward, 5 / 7)
+
+    def test_token_match_rejects_invalid_sequences(self):
+        with self.assertRaisesRegex(ValueError, "same positive length"):
+            evaluate_sid_token_match([], [])
+        with self.assertRaisesRegex(ValueError, "same positive length"):
+            evaluate_sid_token_match([1], [1, 2])

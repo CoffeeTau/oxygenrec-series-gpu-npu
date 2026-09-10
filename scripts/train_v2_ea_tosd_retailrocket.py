@@ -29,6 +29,7 @@ from oxygenrec.ea_tosd import (
     load_pretrained_with_future_positions,
     select_best_verifiable_trajectory,
 )
+from oxygenrec.evaluation import evaluate_sid_token_match
 from oxygenrec.model import OxygenRECConfig, OxygenRECModel
 from oxygenrec.sid import PrefixTrie, SIDRegistry
 from train_v2_listwise_retailrocket import BEHAVIOR_WEIGHTS, chunks, evaluate
@@ -199,7 +200,7 @@ def select_review_rows(rows: list[dict]) -> tuple[list[dict], dict]:
     }
 
 
-def write_review(output_dir: Path, rows: list[dict], summary: dict) -> None:
+def write_review(output_dir: Path, rows: list[dict], summary: dict) -> dict:
     """导出匿名轨迹、reward、未来前缀、advantage和熵门供人工复核。"""
     selected, coverage = select_review_rows(rows)
     jsonl_path = output_dir / "ea_tosd_representative_trajectories.jsonl"
@@ -227,7 +228,11 @@ def write_review(output_dir: Path, rows: list[dict], summary: dict) -> None:
             f"- 目标行为：`{row['behavior']}`",
             f"- gold SID列表：`{row['gold_sids']}`",
             f"- Teacher未来SID：`{row['future_sids']}`",
+            f"- Teacher未来行为：`{row['future_behaviors']}`",
+            f"- 相对gold末尾的小时差：`{row['future_hours_after_gold']}`",
+            f"- future是否与gold SID重合：`{row['future_matches_gold_sid']}`",
             f"- G条候选：`{row['candidate_sids']}`",
+            f"- 候选逐token命中：`{row['candidate_token_hits']}`",
             f"- 候选reward：`{row['candidate_rewards']}`",
             f"- best索引：{row['best_index']}",
             f"- best SID：`{row['selected_sids']}`",
@@ -257,6 +262,7 @@ def write_review(output_dir: Path, rows: list[dict], summary: dict) -> None:
         ) + "\n",
         encoding="utf-8",
     )
+    return coverage
 
 
 def main() -> None:
@@ -460,12 +466,45 @@ def main() -> None:
                     sid for sid, masked in zip(future_rows[index], future_masks[index])
                     if not masked
                 ]
+                candidate_matches = [
+                    evaluate_sid_token_match(
+                        candidate,
+                        gold_rows[index],
+                        geometric_decay=args.geometric_decay,
+                    )
+                    for candidate in candidate_rows[index]
+                ]
+                if any(
+                    abs(match.geometric_reward - reward) > 1e-6
+                    for match, reward in zip(
+                        candidate_matches, reward_rows[index], strict=True
+                    )
+                ):
+                    raise RuntimeError("exported token hits do not reproduce candidate reward")
+                gold_items = {
+                    tuple(gold_rows[index][start : start + registry.levels])
+                    for start in range(0, len(gold_rows[index]), registry.levels)
+                }
+                last_gold_time = max(target.timestamp_ms for target in sample.targets)
                 review_rows.append({
                     "behavior": sample.target_behavior.value,
                     "gold_sids": gold_rows[index],
                     "future_sids": valid_future,
+                    "future_behaviors": [
+                        target.behavior.value for target in sample.future_targets
+                    ],
+                    "future_hours_after_gold": [
+                        round((target.timestamp_ms - last_gold_time) / 3_600_000, 6)
+                        for target in sample.future_targets
+                    ],
+                    "future_matches_gold_sid": [
+                        tuple(sid) in gold_items for sid in valid_future
+                    ],
                     "future_count": len(valid_future),
                     "candidate_sids": candidate_rows[index],
+                    "candidate_token_hits": [
+                        list(match.hits) for match in candidate_matches
+                    ],
                     "candidate_rewards": reward_rows[index],
                     "best_index": best_rows[index],
                     "selected_sids": selected_rows[index],
@@ -522,7 +561,11 @@ def main() -> None:
         },
         args.output_dir / f"epoch-{args.epochs}.pt",
     )
-    write_review(args.output_dir, review_rows, summary)
+    review_coverage = write_review(args.output_dir, review_rows, summary)
+    print(
+        "stage=review_coverage "
+        f"roles={json.dumps(review_coverage, sort_keys=True, separators=(',', ':'))}"
+    )
     print(
         "OK "
         f"device={device.type} variant=v2_ea_tosd train={len(train_samples)} "
@@ -537,6 +580,10 @@ def main() -> None:
         f"teacher_student_delta={max_teacher_student_delta:.6f} "
         f"before_sid_recall={before_metrics['sid_recall']:.6f} "
         f"after_sid_recall={after_metrics['sid_recall']:.6f} "
+        f"before_token_accuracy={before_metrics['sid_token_accuracy']:.6f} "
+        f"after_token_accuracy={after_metrics['sid_token_accuracy']:.6f} "
+        f"before_geo_reward={before_metrics['geometric_token_reward']:.6f} "
+        f"after_geo_reward={after_metrics['geometric_token_reward']:.6f} "
         f"review={args.output_dir / 'ea_tosd_representative_trajectories.md'} "
         "future_same_split=True external_reward_model=False"
     )

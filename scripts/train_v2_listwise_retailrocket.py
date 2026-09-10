@@ -23,6 +23,7 @@ from oxygenrec.data import (
     load_retailrocket_events,
 )
 from oxygenrec.model import OxygenRECConfig, OxygenRECModel
+from oxygenrec.evaluation import evaluate_sid_token_match
 from oxygenrec.sid import PrefixTrie, SIDRegistry
 
 
@@ -157,6 +158,11 @@ def evaluate(model, samples, registry, trie, args, device):
                     None,
                 )
                 legal_items = sum(trie.contains(item) for item in predicted_items)
+                token_match = evaluate_sid_token_match(
+                    predicted,
+                    target,
+                    geometric_decay=getattr(args, "geometric_decay", 0.9),
+                )
                 behavior = sample.target_behavior.value
                 totals.update({
                     "lists": 1,
@@ -167,6 +173,9 @@ def evaluate(model, samples, registry, trie, args, device):
                     "exact_lists": int(exact),
                     "beam_exact": int(beam_rank is not None),
                     "legal_items": legal_items,
+                    "sid_token_hits": sum(token_match.hits),
+                    "sid_tokens": len(token_match.hits),
+                    "geometric_token_reward": token_match.geometric_reward,
                 })
                 behavior_totals[behavior].update({
                     "lists": 1,
@@ -182,6 +191,9 @@ def evaluate(model, samples, registry, trie, args, device):
                     ).items())),
                     "target_sids": target_items,
                     "generated_sids": predicted_items,
+                    "sid_token_hits": token_match.hits,
+                    "sid_token_accuracy": token_match.accuracy,
+                    "geometric_token_reward": token_match.geometric_reward,
                     "sid_recall": overlap / args.list_size,
                     "position_accuracy": position_hits / args.list_size,
                     "exact_list": exact,
@@ -201,6 +213,10 @@ def evaluate(model, samples, registry, trie, args, device):
         "exact_list_rate": totals["exact_lists"] / totals["lists"],
         "beam_exact_rate": totals["beam_exact"] / totals["lists"],
         "legal_item_rate": totals["legal_items"] / totals["targets"],
+        "sid_token_accuracy": totals["sid_token_hits"] / totals["sid_tokens"],
+        "geometric_token_reward": (
+            totals["geometric_token_reward"] / totals["lists"]
+        ),
         "behavior": {
             behavior: {
                 "lists": counts["lists"],
@@ -275,6 +291,8 @@ def write_review_artifacts(output_dir: Path, metrics: dict, rows: list[dict]) ->
         f"- exact-list rate：{metrics['exact_list_rate']:.6f}",
         f"- beam exact rate：{metrics['beam_exact_rate']:.6f}",
         f"- 合法商品率：{metrics['legal_item_rate']:.6f}",
+        f"- SID token准确率：{metrics['sid_token_accuracy']:.6f}",
+        f"- 几何token reward：{metrics['geometric_token_reward']:.6f}",
         f"- 固定角色覆盖：`{json.dumps(coverage, ensure_ascii=False, sort_keys=True)}`",
         "",
     ]
@@ -289,6 +307,9 @@ def write_review_artifacts(output_dir: Path, metrics: dict, rows: list[dict]) ->
             f"- 历史行为计数：`{row['history_behavior_counts']}`",
             f"- 目标SID列表：`{row['target_sids']}`",
             f"- greedy SID列表：`{row['generated_sids']}`",
+            f"- SID token命中：`{row['sid_token_hits']}`",
+            f"- SID token准确率：{row['sid_token_accuracy']:.6f}",
+            f"- 几何token reward：{row['geometric_token_reward']:.6f}",
             f"- SID recall：{row['sid_recall']:.6f}",
             f"- 逐位置准确率：{row['position_accuracy']:.6f}",
             f"- exact list：`{row['exact_list']}`",
