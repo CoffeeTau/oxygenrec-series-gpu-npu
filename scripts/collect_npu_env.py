@@ -190,10 +190,14 @@ def collect_report() -> dict[str, Any]:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
+    snapshot_date = datetime.now(timezone.utc).date().isoformat()
     parser.add_argument(
         "--output",
         type=Path,
-        default=Path("checkpoints/npu_stage0/environment.json"),
+        default=Path(
+            "checkpoints/npu_stage0/"
+            f"npu_server_environment_snapshot_{snapshot_date}.json"
+        ),
     )
     return parser.parse_args()
 

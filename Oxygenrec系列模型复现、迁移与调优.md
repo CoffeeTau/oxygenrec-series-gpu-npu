@@ -48,9 +48,11 @@ GPU侧v1/v2方法验收已经收口，NPU迁移按以下顺序执行：
   → 吞吐、HBM与扩展效率
 ```
 
-- 当前状态：Stage-0脚本已完成本地静态检查，目标Ascend服务器尚未运行；
+- 当前状态：Stage-0已在8×Ascend 950DT服务器通过，单卡backward、AdamW更新与checkpoint恢复成功；
 - 入口：`bash run_npu_stage0.sh`；
 - 计划与验收条件：[`docs/npu_migration_plan.md`](docs/npu_migration_plan.md)；
+- NPU环境记录：[`docs/npu_server_environment_snapshot_2026-09-11.md`](docs/npu_server_environment_snapshot_2026-09-11.md)；
 - GPU冻结证据：[`OxygenREC-v2 GPU方法复现验收报告`](实验记录/案例分析/OxygenREC-v2%20GPU方法复现验收报告.md)。
 
-在Stage-0输出回传前，不把CANN/TorchNPU安装状态推断成模型兼容，不进入多卡或性能调优。
+下一步是v2固定输入的logits/loss/greedy/beam与单步梯度对齐；在该阶段通过前，不把
+基础张量测试推断成OxygenREC模型兼容，也不进入多卡或性能调优。

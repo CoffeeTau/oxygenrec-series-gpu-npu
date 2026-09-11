@@ -52,10 +52,11 @@ Current handoff:
 
 1. GPU-side OxygenREC-v1 and v2 method reproduction is closed within the
    public-proxy scope; this is not a stable quality or private-table claim;
-2. NPU migration starts with environment collection and one-card tensor,
-   backward, optimizer, and checkpoint validation via ``run_npu_stage0.sh``;
-3. only after Stage-0 passes should v2 fixed-input logits/loss/generation
-   alignment and then HCCL/multi-card validation begin;
+2. NPU Stage-0 passed on an 8-card Ascend 950DT server: TorchNPU/HCCL are
+   available and one-card tensor, backward, optimizer, and checkpoint checks
+   succeeded;
+3. the next gate is v2 fixed-input logits/loss/generation and gradient
+   alignment, followed by short training and HCCL/multi-card validation;
 4. MoE and production-serving optimization remain deferred.
 
 See [the reuse survey](docs/reference_reuse.md) and
@@ -66,6 +67,7 @@ is documented in [the training protocol](docs/training_protocol.md).
 中文总体进度见 [复现进度](复现进度.md)，逐次实验判断与修正过程见
 [复现实验日志](实验记录/复现实验日志.md)。
 GPU→NPU的分阶段门槛见[NPU迁移计划](docs/npu_migration_plan.md)。
+GPU与NPU服务器环境分别见[环境快照索引](docs/server_environment.md)。
 服务器直接下载并接入Qwen的逐步操作见
 [Qwen服务器接入操作指南](Qwen服务器接入操作指南.md)。
 

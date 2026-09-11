@@ -1,7 +1,12 @@
-# L20 server environment collection
+# OxygenREC服务器环境快照索引
 
-已整理并长期保留的2026-08-21服务器截图快照见：
-[`server_environment_snapshot_2026-08-21.md`](server_environment_snapshot_2026-08-21.md)。
+已整理并长期保留两侧服务器快照：
+
+- GPU：[`gpu_server_environment_snapshot_2026-08-21.md`](gpu_server_environment_snapshot_2026-08-21.md)，8×NVIDIA L20；
+- NPU：[`npu_server_environment_snapshot_2026-09-11.md`](npu_server_environment_snapshot_2026-09-11.md)，8×Ascend 950DT。
+
+以下命令用于重新采集GPU环境。NPU环境与单卡验证统一使用项目根目录的
+`bash run_npu_stage0.sh`。
 
 Copy `scripts/collect_server_env.py` to the server and run it inside the exact
 Python environment that will train OxygenREC:

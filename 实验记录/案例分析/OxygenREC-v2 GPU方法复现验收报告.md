@@ -103,6 +103,7 @@ best-of-G、几何reward、熵门、SFT anchor与策略更新均实际执行。
 限制。稳定效果判断需要扩大validation、独立test和多seed；这不是本次方法验收的
 完成条件，也不能通过继续挑选case替代。
 
-GPU侧方法复现到此冻结。下一阶段按
-[`NPU迁移计划`](../../docs/npu_migration_plan.md)执行：先验证Ascend版本栈与单卡基础
-计算，再建立v2固定输入的logits/loss/生成/梯度对齐；未完成前不报告NPU通过。
+GPU侧方法复现到此冻结。NPU Stage-0已在8×Ascend 950DT服务器通过，环境证据见
+[`NPU服务器环境快照`](../../docs/npu_server_environment_snapshot_2026-09-11.md)。下一阶段
+按[`NPU迁移计划`](../../docs/npu_migration_plan.md)建立v2固定输入的
+logits/loss/生成/梯度对齐；未完成前不报告OxygenREC模型已迁移到NPU。

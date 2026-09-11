@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
 import importlib.metadata
 import json
 from pathlib import Path
@@ -11,11 +12,15 @@ from pathlib import Path
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
+    snapshot_date = datetime.now(timezone.utc).date().isoformat()
     parser.add_argument("--device", default="npu:0")
     parser.add_argument(
         "--output",
         type=Path,
-        default=Path("checkpoints/npu_stage0/single_card.json"),
+        default=Path(
+            "checkpoints/npu_stage0/"
+            f"npu_single_card_validation_{snapshot_date}.json"
+        ),
     )
     return parser.parse_args()
 
