@@ -25,6 +25,7 @@ from oxygenrec.data import (
     load_retailrocket_events,
 )
 from oxygenrec.evaluation import evaluate_sid_token_match
+from oxygenrec.device import resolve_device, seed_torch
 from oxygenrec.model import OxygenRECConfig, OxygenRECModel
 from oxygenrec.sid import PrefixTrie, SIDRegistry
 from train_v2_listwise_retailrocket import BEHAVIOR_WEIGHTS, chunks, sid_chunks
@@ -589,13 +590,9 @@ def main() -> None:
         raise ValueError("learning-rate must be positive")
     if not 0.0 <= args.geometric_decay <= 1.0:
         raise ValueError("geometric-decay must be in [0, 1]")
-    device = torch.device(args.device)
-    if device.type == "cuda" and not torch.cuda.is_available():
-        raise RuntimeError("CUDA is required but torch.cuda.is_available() is false")
+    device = resolve_device(args.device)
     random.seed(args.seed)
-    torch.manual_seed(args.seed)
-    if device.type == "cuda":
-        torch.cuda.manual_seed_all(args.seed)
+    seed_torch(args.seed, device)
 
     print("stage=load_events_and_build_paired_daily_cohort")
     events = list(load_retailrocket_events(args.events))
@@ -674,9 +671,7 @@ def main() -> None:
             model = models[variant]
             optimizer = optimizers[variant]
             model.train()
-            torch.manual_seed(args.seed + 10_000 + epoch)
-            if device.type == "cuda":
-                torch.cuda.manual_seed_all(args.seed + 10_000 + epoch)
+            seed_torch(args.seed + 10_000 + epoch, device)
             total_loss = 0.0
             batches = 0
             for sample_batch in chunks(ordered_samples, args.batch_size):

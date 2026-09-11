@@ -48,11 +48,13 @@ GPU侧v1/v2方法验收已经收口，NPU迁移按以下顺序执行：
   → 吞吐、HBM与扩展效率
 ```
 
-- 当前状态：Stage-0已在8×Ascend 950DT服务器通过，单卡backward、AdamW更新与checkpoint恢复成功；
-- 入口：`bash run_npu_stage0.sh`；
+- 当前状态：Stage-0已在8×Ascend 950DT服务器通过；Stage-0.5静态迁移清单和Stage-1/2固定输入对齐代码就绪，尚未服务器实跑；
+- GPU参考入口：`CUDA_VISIBLE_DEVICES=0 bash run_gpu_v2_migration_reference.sh`；
+- NPU比较入口：复制GPU参考包后运行`NPU_DEVICE=npu:0 bash run_npu_v2_migration_compare.sh`；
 - 计划与验收条件：[`docs/npu_migration_plan.md`](docs/npu_migration_plan.md)；
 - NPU环境记录：[`docs/npu_server_environment_snapshot_2026-09-11.md`](docs/npu_server_environment_snapshot_2026-09-11.md)；
 - GPU冻结证据：[`OxygenREC-v2 GPU方法复现验收报告`](实验记录/案例分析/OxygenREC-v2%20GPU方法复现验收报告.md)。
 
-下一步是v2固定输入的logits/loss/greedy/beam与单步梯度对齐；在该阶段通过前，不把
-基础张量测试推断成OxygenREC模型兼容，也不进入多卡或性能调优。
+下一步先在GPU生成v2 Full固定输入参考包，再在NPU比较
+logits/loss/greedy/beam、全量梯度与单步参数delta；在该阶段通过前，不把基础张量测试
+推断成OxygenREC模型兼容，也不进入短训练、多卡或性能调优。
