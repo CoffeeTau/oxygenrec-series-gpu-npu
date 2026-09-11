@@ -48,13 +48,15 @@ Implemented now:
 - public-proxy SA-GCPO objectives and rollout validation;
 - dependency-free unit tests for these invariants.
 
-Review/future work:
+Current handoff:
 
-1. validate on CUDA that executable Qwen plans reach ``forward``, ``generate``,
-   ``beam_search``, and rollout candidate log-probabilities;
-2. design the real-Qwen SFT data protocol and training interface;
-3. review the completed GPU-side v1 method chain and its public-data limits;
-4. keep NPU migration and MoE deferred until the GPU learning objectives close.
+1. GPU-side OxygenREC-v1 and v2 method reproduction is closed within the
+   public-proxy scope; this is not a stable quality or private-table claim;
+2. NPU migration starts with environment collection and one-card tensor,
+   backward, optimizer, and checkpoint validation via ``run_npu_stage0.sh``;
+3. only after Stage-0 passes should v2 fixed-input logits/loss/generation
+   alignment and then HCCL/multi-card validation begin;
+4. MoE and production-serving optimization remain deferred.
 
 See [the reuse survey](docs/reference_reuse.md) and
 [explicit implementation assumptions](configs/assumptions.yaml). The current
@@ -63,6 +65,7 @@ model shapes, masks, loss, and validation commands are in
 is documented in [the training protocol](docs/training_protocol.md).
 中文总体进度见 [复现进度](复现进度.md)，逐次实验判断与修正过程见
 [复现实验日志](实验记录/复现实验日志.md)。
+GPU→NPU的分阶段门槛见[NPU迁移计划](docs/npu_migration_plan.md)。
 服务器直接下载并接入Qwen的逐步操作见
 [Qwen服务器接入操作指南](Qwen服务器接入操作指南.md)。
 

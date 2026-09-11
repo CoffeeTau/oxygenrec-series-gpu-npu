@@ -290,12 +290,17 @@ def compare_rows(rows_by_variant: dict[str, list[dict]]) -> list[dict]:
         full_generated = [
             token for sid in full["generated_sids"] for token in sid
         ]
+        target_sids_unique = (
+            len({tuple(sid) for sid in base["target_sids"]})
+            == len(base["target_sids"])
+        )
         compared.append({
             "behavior": base["behavior"],
             "utc_day": base["utc_day"],
             "history_length": base["history_length"],
             "history_behavior_counts": base["history_behavior_counts"],
             "target_sids": base["target_sids"],
+            "target_sids_unique": target_sids_unique,
             "base": {
                 key: base[key]
                 for key in (
@@ -386,7 +391,8 @@ def select_review_rows(rows: list[dict]) -> tuple[list[dict], dict]:
         (
             "ib_duplicate_introduced",
             lambda row: (
-                row["base"]["generated_items_unique"]
+                row["target_sids_unique"]
+                and row["base"]["generated_items_unique"]
                 and not row["ib"]["generated_items_unique"]
             ),
             "history_length",
@@ -395,9 +401,16 @@ def select_review_rows(rows: list[dict]) -> tuple[list[dict], dict]:
         (
             "weighting_duplicate_introduced",
             lambda row: (
-                row["ib"]["generated_items_unique"]
+                row["target_sids_unique"]
+                and row["ib"]["generated_items_unique"]
                 and not row["full"]["generated_items_unique"]
             ),
+            "history_length",
+            True,
+        ),
+        (
+            "target_sid_collision",
+            lambda row: not row["target_sids_unique"],
             "history_length",
             True,
         ),
@@ -465,6 +478,9 @@ def write_artifacts(
             row["full_vs_ib_generated_token_changes"] > 0
             for row in compared_rows
         ),
+        "target_sid_collision_lists": sum(
+            not row["target_sids_unique"] for row in compared_rows
+        ),
     }
     summary = {
         **summary,
@@ -496,8 +512,8 @@ def write_artifacts(
         "",
         "## 聚合指标",
         "",
-        "| 阶段/变体 | SID recall | token accuracy | geometric reward | generated SID unique | all-unique lists | legal items |",
-        "|---|---:|---:|---:|---:|---:|---:|",
+        "| 阶段/变体 | SID recall | token accuracy | geometric reward | target SID unique | generated SID unique | all-unique lists | legal items |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for stage in ("before", "after"):
         for variant in VARIANTS:
@@ -506,6 +522,7 @@ def write_artifacts(
                 f"| {stage}/{variant} | {values['sid_recall']:.6f} | "
                 f"{values['sid_token_accuracy']:.6f} | "
                 f"{values['geometric_token_reward']:.6f} | "
+                f"{values['target_sid_unique_rate']:.6f} | "
                 f"{values['generated_sid_unique_rate']:.6f} | "
                 f"{values['all_unique_list_rate']:.6f} | "
                 f"{values['legal_item_rate']:.6f} |"
@@ -519,6 +536,7 @@ def write_artifacts(
         f"- Full - Base：`{summary['after_delta']['full_minus_base']}`",
         f"- +Ib相对Base生成变化列表数：{output_changes['ib_vs_base_changed_lists']}",
         f"- Full相对+Ib生成变化列表数：{output_changes['full_vs_ib_changed_lists']}",
+        f"- 目标SID发生碰撞的列表数：{output_changes['target_sid_collision_lists']}",
         f"- 固定案例覆盖：`{json.dumps(coverage, ensure_ascii=False, sort_keys=True)}`",
         "",
     ])
@@ -531,6 +549,7 @@ def write_artifacts(
             f"- UTC日编号：`{row['utc_day']}`",
             f"- 历史长度/行为：{row['history_length']} / `{row['history_behavior_counts']}`",
             f"- 目标SID列表：`{row['target_sids']}`",
+            f"- 目标SID互异：`{row['target_sids_unique']}`",
             f"- Base：`{row['base']}`",
             f"- +Ib：`{row['ib']}`",
             f"- Full：`{row['full']}`",

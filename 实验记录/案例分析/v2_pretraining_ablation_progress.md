@@ -1,7 +1,7 @@
 # OxygenREC-v2预训练配对消融进度
 
 > 主日志：[`复现实验日志.md`](../复现实验日志.md)  
-> 当前状态：三组CUDA smoke及四个代表案例已review；案例选择器已纠正，待服务器确定性复跑和缺失角色回传后做最终方法级验收。
+> 当前状态：选择器修正后CUDA复跑及六个代表案例均通过，Behavior-aware Pretraining已完成方法级GPU复现；不包含稳定质量收益结论。
 > 聚合终端：[`pretraining-ablation-smoke`](../案例原始记录/v2_pretraining_ablation/pretraining-ablation-smoke.md)
 > 聚合报告转录：[`pretraining-ablation-report`](../案例原始记录/v2_pretraining_ablation/pretraining-ablation-report.md)
 
@@ -111,9 +111,45 @@ Base→`+I_b`得到一个完整SID命中，但总token命中从12降至11。因�
 - 新增`v2_pretraining_ablation_all_rows.jsonl`，保存全部validation配对行，避免固定
   角色选择丢失重要的非目标输出变化。
 
-当前截图还缺覆盖表中的`transaction=review-005`，且旧报告没有导出真正的
-`weighting_output_changed`及`weighting_duplicate_introduced`案例。这些内容不能从聚合
-表反推或补造。因此现阶段判断为：
-三组训练与指标计算可解释，案例层面已发现并修正报告缺陷；服务器用同一命令确定性
-复跑、确认`weighting_gain=null`并回传加权输出变化与transaction案例后，才能关闭
-v2预训练方法级GPU验收。稳定质量收益仍需更大validation和多seed，不由本smoke承担。
+## 2026-09-11：选择器修正后CUDA复跑
+
+复跑保持E124全部聚合数值不变，并新增两项生成敏感性计数：`+I_b`相对Base改变
+`13/32`条列表，Full相对`+I_b`改变`3/32`条列表。训练路径未因报告修改而变化，且
+两个组件都对离散输出产生了可观测影响。
+
+固定角色现在正确输出`weighting_gain=null`。这说明在本轮32条validation中，行为
+加权没有任何逐样本正token增益；不能再用零差值案例代表“加权收益”。与此同时，
+`weighting_output_changed=review-003`证明加权并非没有生效，而是改变了错误预测之间
+的选择，没有改变目标token命中。
+
+新增六例的原始转录位于
+[`selector-fixed-2026-09-11`](../案例原始记录/v2_pretraining_ablation/selector-fixed-2026-09-11/terminal-and-coverage.md)：
+
+- `review-001`：`I_b`改变5个生成token，三组目标指标仍全零；
+- `review-002`：`I_b`引入重复SID，解释Base→`+I_b`列表唯一率下降的一种具体路径；
+- `review-003`：行为加权改变5个token并重新引入重复SID，但目标SID也发生碰撞；
+- `review-004`：唯一完整SID正例，仍把第一个正确SID复制到第二个位置；
+- `review-005`：最大负例，`I_b`使局部token命中从`1/6`降至0；
+- `review-006`：transaction代表例，三组完全相同，只有`2/6`局部命中。
+
+### 目标SID碰撞边界
+
+`review-003`的目标为`[[162,11,28],[162,11,28]]`。源码中的
+`ListwiseTargetSample`断言目标原始商品ID互异，daily构造器也按商品ID去重；而
+`SIDRegistry`明确允许并保留多个商品映射到同一个SID。因此这里是两个不同目标商品
+在量化后发生SID碰撞。由此得到两条解释边界：
+
+1. `generated_items_unique=False`准确含义是“生成SID重复”，不必然等于重复了同一个
+   原始商品；当前生成器没有在碰撞SID内部解析具体商品。
+2. 当目标SID本身重复时，输出SID唯一率不能单独作为质量方向。后续报告会显式输出
+   `target_sids_unique`和目标SID碰撞列表数，并且只在目标SID互异时分配
+   `ib_duplicate_introduced`/`weighting_duplicate_introduced`角色。
+
+### 最终判断
+
+Behavior-aware Pretraining的方法级GPU验收完成：Base→`+I_b`→Full三组配对、行为
+指令、行为加权NTP、daily列表、合法生成、组件输出敏感性和正负/稀有行为案例均有
+服务器实测证据。当前结果仍只是单seed、5K/32公开代理smoke；`I_b`只有一个稀疏
+完整SID正例，行为加权没有目标命中增益，并伴随SID序列唯一率下降，因此不建立稳定
+质量收益。若目标是论文效果对齐，下一阶段应扩大validation并做多seed；若目标是
+方法复现与迁移，则本模块可以冻结并进入v2 GPU总验收或NPU迁移。
