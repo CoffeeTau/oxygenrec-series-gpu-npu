@@ -32,7 +32,7 @@ Decoder → 生成多个商品 SID
 | 模块                                      | 当前状态 | 已验证内容 | 问题  |
 | --------------------------------------- | ---- | ----- | --- |
 | Behavior Instruction（Decoder 端行为指令）     | 已完成CUDA方法验证 | 保留行为token、两层投影、`[BOS,I_s,I_r,I_b]`及全部解码接口 | 具体首次CUDA数值未留存；真实列表已接通 |
-| Behavior-aware Pretraining（行为感知的列表式预训练） | 三组配对代码完成，待CUDA | 目标行为ID、`1.2/1.5/2.0`权重、`[B,N,3]→[B,3N]`解码、真实daily列表；Base→`+I_b`→Full同cohort消融 | 欠充分训练，尚未获得PT-only配对结果或稳定收益证据 |
+| Behavior-aware Pretraining（行为感知的列表式预训练） | 三组配对CUDA和四例review通过，选择器修正待复跑 | 目标行为ID、`1.2/1.5/2.0`权重、`[B,N,3]→[B,3N]`解码、真实daily列表；正例、负例和重复例均已核验 | `I_b`唯一完整命中同时复制首目标；Full无目标收益；旧`weighting_gain`实为零差值，现已新增真实输出变化角色待CUDA确认 |
 | EA-TOSD（熵感知的轨迹优化自蒸馏）                    | 已完成方法级GPU复现 | 几何reward、best-of-G、未来SID共享Teacher、双熵蒸馏、SFT anchor、同split真实future、checkpoint迁移、配对控制及差异案例 | EA相对SFT改变80/96个参数张量及2/32条greedy列表，但未新增目标token命中，尚无收益结论 |
 
 # NPU侧Oxygenrec-series迁移与调优

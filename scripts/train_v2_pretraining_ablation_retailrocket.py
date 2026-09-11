@@ -281,6 +281,15 @@ def compare_rows(rows_by_variant: dict[str, list[dict]]) -> list[dict]:
             raise RuntimeError("base and +Ib validation rows are not paired")
         if identity != (full["behavior"], full["utc_day"], full["target_sids"]):
             raise RuntimeError("base and full validation rows are not paired")
+        base_generated = [
+            token for sid in base["generated_sids"] for token in sid
+        ]
+        ib_generated = [
+            token for sid in ib["generated_sids"] for token in sid
+        ]
+        full_generated = [
+            token for sid in full["generated_sids"] for token in sid
+        ]
         compared.append({
             "behavior": base["behavior"],
             "utc_day": base["utc_day"],
@@ -320,20 +329,89 @@ def compare_rows(rows_by_variant: dict[str, list[dict]]) -> list[dict]:
             "full_minus_base_token_accuracy": (
                 full["sid_token_accuracy"] - base["sid_token_accuracy"]
             ),
+            "ib_vs_base_generated_token_changes": sum(
+                left != right
+                for left, right in zip(
+                    base_generated, ib_generated, strict=True
+                )
+            ),
+            "full_vs_ib_generated_token_changes": sum(
+                left != right
+                for left, right in zip(
+                    ib_generated, full_generated, strict=True
+                )
+            ),
         })
     return compared
 
 
 def select_review_rows(rows: list[dict]) -> tuple[list[dict], dict]:
     specs = (
-        ("largest_ib_gain", lambda row: True, "ib_minus_base_token_accuracy", True),
-        ("largest_full_gain", lambda row: True, "full_minus_base_token_accuracy", True),
-        ("largest_full_drop", lambda row: True, "full_minus_base_token_accuracy", False),
-        ("weighting_gain", lambda row: True, "full_minus_ib_token_accuracy", True),
-        ("transaction", lambda row: row["behavior"] == "transaction", "history_length", True),
+        (
+            "largest_ib_gain",
+            lambda row: row["ib_minus_base_token_accuracy"] > 0.0,
+            "ib_minus_base_token_accuracy",
+            True,
+        ),
+        (
+            "largest_full_gain",
+            lambda row: row["full_minus_base_token_accuracy"] > 0.0,
+            "full_minus_base_token_accuracy",
+            True,
+        ),
+        (
+            "largest_full_drop",
+            lambda row: row["full_minus_base_token_accuracy"] < 0.0,
+            "full_minus_base_token_accuracy",
+            False,
+        ),
+        (
+            "weighting_gain",
+            lambda row: row["full_minus_ib_token_accuracy"] > 0.0,
+            "full_minus_ib_token_accuracy",
+            True,
+        ),
+        (
+            "ib_output_changed",
+            lambda row: row["ib_vs_base_generated_token_changes"] > 0,
+            "ib_vs_base_generated_token_changes",
+            True,
+        ),
+        (
+            "weighting_output_changed",
+            lambda row: row["full_vs_ib_generated_token_changes"] > 0,
+            "full_vs_ib_generated_token_changes",
+            True,
+        ),
+        (
+            "ib_duplicate_introduced",
+            lambda row: (
+                row["base"]["generated_items_unique"]
+                and not row["ib"]["generated_items_unique"]
+            ),
+            "history_length",
+            True,
+        ),
+        (
+            "weighting_duplicate_introduced",
+            lambda row: (
+                row["ib"]["generated_items_unique"]
+                and not row["full"]["generated_items_unique"]
+            ),
+            "history_length",
+            True,
+        ),
+        (
+            "transaction",
+            lambda row: row["behavior"] == "transaction",
+            "history_length",
+            True,
+        ),
         (
             "generated_duplicate",
-            lambda row: any(not row[name]["generated_items_unique"] for name in VARIANTS),
+            lambda row: any(
+                not row[name]["generated_items_unique"] for name in VARIANTS
+            ),
             "history_length",
             True,
         ),
@@ -374,15 +452,39 @@ def metric_delta(left: dict, right: dict) -> dict:
     return {name: right[name] - left[name] for name in names}
 
 
-def write_artifacts(output_dir: Path, summary: dict, compared_rows: list[dict]) -> None:
+def write_artifacts(
+    output_dir: Path, summary: dict, compared_rows: list[dict]
+) -> dict:
     selected, coverage = select_review_rows(compared_rows)
-    summary = {**summary, "coverage": coverage, "representative_cases": len(selected)}
+    output_changes = {
+        "ib_vs_base_changed_lists": sum(
+            row["ib_vs_base_generated_token_changes"] > 0
+            for row in compared_rows
+        ),
+        "full_vs_ib_changed_lists": sum(
+            row["full_vs_ib_generated_token_changes"] > 0
+            for row in compared_rows
+        ),
+    }
+    summary = {
+        **summary,
+        "coverage": coverage,
+        "representative_cases": len(selected),
+        "output_changes": output_changes,
+    }
     (output_dir / "v2_pretraining_ablation_summary.json").write_text(
         json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
     (output_dir / "v2_pretraining_ablation_cases.jsonl").write_text(
         "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in selected),
+        encoding="utf-8",
+    )
+    (output_dir / "v2_pretraining_ablation_all_rows.jsonl").write_text(
+        "".join(
+            json.dumps(row, ensure_ascii=False) + "\n"
+            for row in compared_rows
+        ),
         encoding="utf-8",
     )
     lines = [
@@ -415,6 +517,8 @@ def write_artifacts(output_dir: Path, summary: dict, compared_rows: list[dict]) 
         f"- +Ib - Base：`{summary['after_delta']['ib_minus_base']}`",
         f"- Full - +Ib：`{summary['after_delta']['full_minus_ib']}`",
         f"- Full - Base：`{summary['after_delta']['full_minus_base']}`",
+        f"- +Ib相对Base生成变化列表数：{output_changes['ib_vs_base_changed_lists']}",
+        f"- Full相对+Ib生成变化列表数：{output_changes['full_vs_ib_changed_lists']}",
         f"- 固定案例覆盖：`{json.dumps(coverage, ensure_ascii=False, sort_keys=True)}`",
         "",
     ])
@@ -433,6 +537,8 @@ def write_artifacts(output_dir: Path, summary: dict, compared_rows: list[dict]) 
             f"- +Ib-Base token accuracy：{row['ib_minus_base_token_accuracy']:+.6f}",
             f"- Full-+Ib token accuracy：{row['full_minus_ib_token_accuracy']:+.6f}",
             f"- Full-Base token accuracy：{row['full_minus_base_token_accuracy']:+.6f}",
+            f"- +Ib/Base生成token变化数：{row['ib_vs_base_generated_token_changes']}",
+            f"- Full/+Ib生成token变化数：{row['full_vs_ib_generated_token_changes']}",
             "",
             "### 人工Review",
             "",
@@ -445,6 +551,7 @@ def write_artifacts(output_dir: Path, summary: dict, compared_rows: list[dict]) 
     (output_dir / "v2_pretraining_ablation.md").write_text(
         "\n".join(lines) + "\n", encoding="utf-8"
     )
+    return {"coverage": coverage, **output_changes}
 
 
 def main() -> None:
@@ -612,7 +719,9 @@ def main() -> None:
             "boundaries": asdict(boundaries),
             "args": vars(args),
         }, args.output_dir / f"{name}-epoch-{args.epochs}.pt")
-    write_artifacts(args.output_dir, summary, compared_rows)
+    report_diagnostics = write_artifacts(
+        args.output_dir, summary, compared_rows
+    )
     print(
         "OK "
         f"device={device.type} variant=v2_pretraining_ablation "
@@ -635,6 +744,12 @@ def main() -> None:
         f"base_legal={after_metrics['base']['legal_item_rate']:.6f} "
         f"ib_legal={after_metrics['ib']['legal_item_rate']:.6f} "
         f"full_legal={after_metrics['full']['legal_item_rate']:.6f} "
+        f"ib_vs_base_changed_lists="
+        f"{report_diagnostics['ib_vs_base_changed_lists']} "
+        f"full_vs_ib_changed_lists="
+        f"{report_diagnostics['full_vs_ib_changed_lists']} "
+        f"review_coverage="
+        f"{json.dumps(report_diagnostics['coverage'], sort_keys=True)} "
         f"report={args.output_dir / 'v2_pretraining_ablation.md'} "
         "external_reward_model=False"
     )
