@@ -1,9 +1,9 @@
-# NPU Stage-0服务器输出（截图转录版）
+# NPU Stage-0服务器输出（服务器运行结果摘录）
 
 > 主日志：[`复现实验日志.md`](../../复现实验日志.md)  
 > 环境快照：[`npu_server_environment_snapshot_2026-09-11.md`](../../../docs/npu_server_environment_snapshot_2026-09-11.md)  
-> 来源：用户于2026-09-11回传的`environment.json`和`single_card.json`截图。  
-> 边界：未收到服务器原始JSON文件；以下只转录截图可可靠辨认且影响验收判断的字段。
+> 来源：用户于2026-09-11提供的`environment.json`和`single_card.json`运行结果。
+> 边界：未收到服务器原始JSON文件；以下只记录可可靠确认且影响验收判断的字段。
 
 ## environment关键字段
 

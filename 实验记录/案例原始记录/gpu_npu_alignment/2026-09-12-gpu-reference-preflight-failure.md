@@ -1,7 +1,7 @@
-# GPU reference前置检查失败（截图转录版）
+# GPU reference前置检查失败（服务器运行结果摘录）
 
-> 来源：用户于2026-09-12提供的GPU服务器终端截图。
-> 性质：截图转录，不是服务器原始日志文件；只记录截图中可辨认且与判断直接相关的字段。
+> 来源：用户于2026-09-12提供的GPU服务器终端输出。
+> 性质：服务器运行结果摘录，不是服务器原始日志文件；只记录已确认且与判断直接相关的字段。
 
 ## 执行环境与命令
 
@@ -19,20 +19,20 @@ output=checkpoints/device_alignment/v2_full/support_inventory/gpu/v2_migration_i
 RuntimeError: GPU reference export requires a clean Git worktree with a known commit
 ```
 
-随后执行`git status --short --untracked-files=all`，截图中可见条目全部以`??`开头，
+随后执行`git status --short --untracked-files=all`，所提供条目全部以`??`开头，
 包括：
 
 - `data/sft/`下的reasoning candidate/audit/review JSON或JSONL；
 - `models/Qwen3-4B-Instruct-2507/`下的模型配置、tokenizer与safetensors权重；
 - `outputs/review/`下的LLM、Qwen、EA-TOSD与checkpoint comparison产物。
 
-截图没有显示`M`、`A`或`D`形式的已跟踪文件变化。
+结果中没有`M`、`A`或`D`形式的已跟踪文件变化。
 
 ## 证据边界
 
 - 静态清单阶段已成功；
 - Transformer的nested tensor信息是warning，不是本次终止原因；
-- 本截图不能证明reference数值阶段完成，也不能证明GPU/NPU精度对齐；
+- 本次结果不能证明reference数值阶段完成，也不能证明GPU/NPU精度对齐；
 - 根因是Git洁净检查把未跟踪实验资产纳入`dirty`，不代表模型或CUDA执行失败。
 
 ## 关联

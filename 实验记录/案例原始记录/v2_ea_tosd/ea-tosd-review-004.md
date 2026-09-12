@@ -1,9 +1,9 @@
 # ea-tosd-review-004
 
-> 记录类型：服务器生成Markdown的截图转录版  
+> 记录类型：服务器运行结果摘录
 > 登记日期：2026-09-10  
 > 服务器产物路径：`checkpoints/retailrocket_v2_ea_tosd_smoke/ea_tosd_representative_trajectories.md`  
-> 完整性说明：截图来自诊断增强前的旧版案例报告，只转录截图中可见字段；future行为、时间差、逐token命中等当时未输出。  
+> 完整性说明：该结果来自诊断增强前的旧版案例报告，只记录当时已经输出的字段；future行为、时间差、逐token命中等当时未输出。
 > 主日志：[`E118`](../../复现实验日志.md)  
 > 案例分析：[`v2_ea_tosd_progress.md`](../../案例分析/v2_ea_tosd_progress.md)
 

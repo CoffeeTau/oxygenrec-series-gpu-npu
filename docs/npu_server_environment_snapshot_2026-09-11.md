@@ -2,7 +2,7 @@
 
 > 环境采集时间：`2026-09-11T12:26:32.957516+00:00`。  
 > 整理时间：2026-09-11 CST。  
-> 证据边界：本文是截图转录与分析，不是服务器JSON的字节级副本；截图没有展示或无法可靠辨认的字段不补造。
+> 证据边界：本文是服务器运行结果摘录与分析，不是服务器JSON的字节级副本；未提供或无法可靠确认的字段不补造。
 
 ## 1. Stage-0结论
 
@@ -64,7 +64,7 @@ PyTorch/TorchNPU单卡验证，但在需要ATC离线编译时必须另行采集�
 | NPU device count | 8 |
 | PyTorch distributed | available |
 | HCCL backend | available |
-| `npu-smi info` | 可用，return code 0；截图显示版本`25.6.rc2.b016` |
+| `npu-smi info` | 可用，return code 0；运行结果记录版本`25.6.rc2.b016` |
 
 设备UUID不在本文保留，因为精度迁移不依赖该标识。
 

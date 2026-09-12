@@ -1,6 +1,6 @@
 # v2-pretrain-ablation-review-003
 
-> 记录类型：服务器生成Markdown的截图转录版  
+> 记录类型：服务器运行结果摘录
 > 登记日期：2026-09-11  
 > 主日志：[`E126`](../../../复现实验日志.md)  
 > 案例分析：[`v2_pretraining_ablation_progress.md`](../../../案例分析/v2_pretraining_ablation_progress.md)
@@ -21,5 +21,5 @@
 
 ## 转录边界
 
-截图中的两个目标SID完全相同。源码保证原始目标商品ID互异，因此该现象与当前SID
-registry允许的多商品映射到同一SID一致；仅凭截图不能恢复两个原始商品ID。
+所提供结果中的两个目标SID完全相同。源码保证原始目标商品ID互异，因此该现象与当前SID
+registry允许的多商品映射到同一SID一致；现有字段不足以恢复两个原始商品ID。

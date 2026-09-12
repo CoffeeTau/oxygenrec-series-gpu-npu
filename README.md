@@ -55,10 +55,9 @@ Current handoff:
 2. NPU Stage-0 passed on an 8-card Ascend 950DT server: TorchNPU/HCCL are
    available and one-card tensor, backward, optimizer, and checkpoint checks
    succeeded;
-3. the v2 fixed-input reference/compare implementation is ready for server
-   execution; the next command is `CUDA_VISIBLE_DEVICES=0 bash
-   run_gpu_v2_migration_reference.sh`, followed by NPU comparison, short
-   training, and HCCL/multi-card validation;
+3. the v2 Full FP32 fixed-input reference has been exported on an NVIDIA L20;
+   the next gate is NPU comparison of logits/loss/generation/gradients and one
+   optimizer step, followed by short training and HCCL/multi-card validation;
 4. MoE and production-serving optimization remain deferred.
 
 See [the reuse survey](docs/reference_reuse.md) and

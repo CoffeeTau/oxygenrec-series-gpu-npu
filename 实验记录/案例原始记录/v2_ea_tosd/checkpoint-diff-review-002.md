@@ -1,9 +1,9 @@
 # checkpoint-diff-review-002
 
-> 记录类型：服务器生成Markdown的截图转录版  
+> 记录类型：服务器运行结果摘录
 > 登记日期：2026-09-10  
 > 服务器产物路径：`outputs/review/v2_ea_tosd_checkpoint_comparison/checkpoint_comparison.md`  
-> 完整性说明：以下字段按用户提供截图逐项转录，不是服务器文件的字节级副本。  
+> 完整性说明：以下字段按用户提供服务器结果逐项转录，不是服务器文件的字节级副本。
 > 主日志：[`E122`](../../复现实验日志.md)  
 > 案例分析：[`v2_ea_tosd_progress.md`](../../案例分析/v2_ea_tosd_progress.md)
 

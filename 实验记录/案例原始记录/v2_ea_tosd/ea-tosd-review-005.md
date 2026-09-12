@@ -1,9 +1,9 @@
 # ea-tosd-review-005
 
-> 记录类型：服务器生成Markdown的截图转录版  
+> 记录类型：服务器运行结果摘录
 > 登记日期：2026-09-10  
 > 服务器产物路径：`checkpoints/retailrocket_v2_ea_tosd_smoke/ea_tosd_representative_trajectories.md`  
-> 完整性说明：以下字段按用户提供截图逐项转录，不是服务器文件的字节级副本；未在截图中出现的字段不补造。  
+> 完整性说明：以下字段按用户提供服务器结果逐项记录，不是服务器文件的字节级副本；未提供的字段不补造。
 > 主日志：[`E119`](../../复现实验日志.md)  
 > 案例分析：[`v2_ea_tosd_progress.md`](../../案例分析/v2_ea_tosd_progress.md)
 
@@ -24,7 +24,7 @@
 - privilege advantage：`[0.28411126136779785, 0.0004439353942871094, 0.007111072540283203, 0.0005321502685546875, -0.00685882568359375, -0.017114639282226562]`
 - low/high gate token：`0/6`
 
-## 截图中的人工Review清单
+## 人工Review清单
 
 - [ ] future SID均能在该用户gold列表之后的真实行为中找到
 - [ ] reward只由候选SID与gold SID逐token命中解释

@@ -1,6 +1,6 @@
 # OxygenREC GPU→NPU迁移与验收计划
 
-> 状态：Stage-0已于2026-09-11在8×Ascend 950DT服务器实测通过；Stage-0.5迁移清单和Stage-1/2固定输入对齐代码已完成本地静态验证，待GPU/NPU服务器实跑。
+> 状态：Stage-0已于2026-09-11在8×Ascend 950DT服务器实测通过；GPU侧v2 Full固定参考已于2026-09-12在NVIDIA L20生成，待NPU复算比较。
 > GPU方法基线：[`OxygenREC-v2 GPU方法复现验收报告`](../实验记录/案例分析/OxygenREC-v2%20GPU方法复现验收报告.md)
 > NPU环境：[`Ascend 950DT服务器环境快照`](npu_server_environment_snapshot_2026-09-11.md)
 
@@ -22,9 +22,9 @@ v1 reference不能冒充v2证据。
 |---|---|---|---|
 | Stage-0A | 驱动/固件、CANN、PyTorch、TorchNPU、可见设备 | 环境JSON与`npu-smi info` | `[通过]`；8卡可见、HCCL可用，ATC精确版本待补 |
 | Stage-0B | 单卡矩阵计算、backward、AdamW step、checkpoint保存恢复 | `OK stage=npu_single_card` | `[通过]`；梯度非零、参数更新、checkpoint一致 |
-| Stage-0.5 | 迁移入口、依赖、平台调用和精度敏感API清单 | GPU/NPU各自静态清单；官方分析工具原始报告另存 | `[代码就绪]`；项目内清单不等于算子支持证明 |
-| Stage-1 | v2固定batch的logits、weighted loss、greedy和beam GPU/NPU对齐 | 同commit/checkpoint/registry哈希；误差与离散匹配报告 | `[代码就绪-待实跑]` |
-| Stage-2 | v2单batch训练步：全量梯度与参数delta对齐 | 梯度有限且误差受控 | `[并入固定参考协议-待实跑]` |
+| Stage-0.5 | 迁移入口、依赖、平台调用和精度敏感API清单 | GPU/NPU各自静态清单；官方分析工具原始报告另存 | `[GPU清单已生成-NPU待采集]`；项目内清单不等于算子支持证明 |
+| Stage-1 | v2固定batch的logits、weighted loss、greedy和beam GPU/NPU对齐 | 同commit/checkpoint/registry哈希；误差与离散匹配报告 | `[GPU参考已冻结-NPU待比较]` |
+| Stage-2 | v2单batch训练步：全量梯度与参数delta对齐 | 梯度有限且误差受控 | `[GPU参考已冻结-NPU待比较]` |
 | Stage-3 | 20步短训练与恢复训练 | loss曲线、checkpoint恢复一致 | `[未开始]` |
 | Stage-4 | 多卡可见性与HCCL通信 | 每卡独立计算、collective通过 | `[未开始]` |
 | Stage-5 | 8卡吞吐、HBM、扩展效率 | 固定配置性能报告 | `[未开始]` |
@@ -110,5 +110,5 @@ Analyse、msProbe或目标NPU实跑。若目标环境提供官方工具，原始
 - v2模型在NPU上的数值误差、生成一致性、显存和吞吐；
 - checkpoint是否能在目标环境直接恢复。
 
-Stage-0基础链已经通过，但Stage-1/2目前只是代码就绪。在GPU参考包与NPU比较报告产生
-前不安装/升级依赖、不启动多卡，也不声称OxygenREC已完成NPU兼容。
+Stage-0基础链与GPU固定参考已经通过，但NPU数值比较尚未执行。在NPU比较报告通过前
+不安装/升级依赖、不启动短训练或多卡，也不声称OxygenREC已完成NPU兼容。

@@ -1,6 +1,6 @@
 # v2-pretrain-ablation-review-003
 
-> 记录类型：服务器生成Markdown的截图转录版  
+> 记录类型：服务器运行结果摘录
 > 登记日期：2026-09-10  
 > 服务器产物路径：`checkpoints/retailrocket_v2_pretraining_ablation_smoke/v2_pretraining_ablation.md`  
 > 主日志：[`E125`](../../复现实验日志.md)  

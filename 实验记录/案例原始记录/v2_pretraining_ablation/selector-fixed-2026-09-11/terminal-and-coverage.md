@@ -1,10 +1,10 @@
 # v2预训练三组消融选择器修正后复跑
 
-> 记录类型：服务器终端及生成Markdown截图转录版  
+> 记录类型：服务器运行结果摘录
 > 实验编号：`E126`  
 > 登记日期：2026-09-11  
 > 服务器报告：`checkpoints/retailrocket_v2_pretraining_ablation_smoke/v2_pretraining_ablation.md`  
-> 完整性说明：以下字段按用户提供截图逐项转录，不是服务器文件的字节级副本。  
+> 完整性说明：以下字段按用户提供服务器结果逐项转录，不是服务器文件的字节级副本。
 > 主日志：[`E126`](../../../复现实验日志.md)  
 > 案例分析：[`v2_pretraining_ablation_progress.md`](../../../案例分析/v2_pretraining_ablation_progress.md)
 

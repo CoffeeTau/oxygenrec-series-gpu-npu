@@ -1,10 +1,10 @@
 # OxygenREC-v2预训练三组消融报告聚合
 
-> 记录类型：服务器生成Markdown的截图转录版  
+> 记录类型：服务器运行结果摘录
 > 实验编号：`E125`  
 > 登记日期：2026-09-10  
 > 服务器产物路径：`checkpoints/retailrocket_v2_pretraining_ablation_smoke/v2_pretraining_ablation.md`  
-> 完整性说明：以下字段按用户提供截图逐项转录，不是服务器文件的字节级副本。  
+> 完整性说明：以下字段按用户提供服务器结果逐项转录，不是服务器文件的字节级副本。
 > 主日志：[`E125`](../../复现实验日志.md)  
 > 案例分析：[`v2_pretraining_ablation_progress.md`](../../案例分析/v2_pretraining_ablation_progress.md)
 
@@ -38,4 +38,4 @@
 }
 ```
 
-截图只包含`review-001`至`review-004`；`review-005`尚未收到，不补造。
+所提供结果只包含`review-001`至`review-004`；`review-005`尚未收到，不补造。

@@ -1,6 +1,6 @@
 # v2-pretrain-ablation-review-005
 
-> 记录类型：服务器生成Markdown的截图转录版  
+> 记录类型：服务器运行结果摘录
 > 登记日期：2026-09-11  
 > 主日志：[`E126`](../../../复现实验日志.md)  
 > 案例分析：[`v2_pretraining_ablation_progress.md`](../../../案例分析/v2_pretraining_ablation_progress.md)

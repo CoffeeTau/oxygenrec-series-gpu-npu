@@ -4,7 +4,7 @@
 >
 > 整理时间：`2026-08-27 10:55:45 CST`。
 >
-> 用途：在原PDF删除后保留模型选择、训练配置和环境兼容性判断所需的信息。截图未完整展示的内容明确标为“未确认”，不作推测。
+> 用途：在原PDF删除后保留模型选择、训练配置和环境兼容性判断所需的信息。未完整保留的内容明确标为“未确认”，不作推测。
 
 ## 1. 系统与主机资源
 
@@ -50,7 +50,7 @@
 | NVIDIA_VISIBLE_DEVICES | `all` |
 | PyTorch编译架构 | `sm_75, sm_80, sm_86, sm_90, sm_100, sm_120, compute_120` |
 
-说明：截图显示PyTorch版本为NVIDIA容器风格的开发版/预发布构建，不应按普通PyPI稳定版假设兼容性。安装额外CUDA扩展前必须在该环境单独编译或验证。
+说明：环境记录显示PyTorch版本为NVIDIA容器风格的开发版/预发布构建，不应按普通PyPI稳定版假设兼容性。安装额外CUDA扩展前必须在该环境单独编译或验证。
 
 ## 4. GPU
 
@@ -66,7 +66,7 @@
 | Streaming multiprocessors | 92 |
 | Driver version | `570.172.08` |
 
-容量说明：设备通常按十进制标称为48 GB；PyTorch截图中的`total_memory_bytes`折算后约44.40 GiB。训练预算应使用实际可分配显存并预留CUDA context、通信和碎片空间，不能按48 GiB全部占满。
+容量说明：设备通常按十进制标称为48 GB；PyTorch环境记录中的`total_memory_bytes`折算后约44.40 GiB。训练预算应使用实际可分配显存并预留CUDA context、通信和碎片空间，不能按48 GiB全部占满。
 
 ## 5. 机器学习软件包
 
@@ -75,7 +75,7 @@
 | transformers | `4.57.6` |
 | accelerate | `1.14.0` |
 | DeepSpeed | 未安装 |
-| flash-attn | `2.7.4.post1+git...`；截图中的完整git后缀未可靠辨认 |
+| flash-attn | `2.7.4.post1+git...`；完整git后缀未可靠确认 |
 | xformers | 未安装 |
 | Triton | `3.6.0+git5d72932fc5.nv26.3` |
 | bitsandbytes | 未安装 |
@@ -89,14 +89,14 @@
 | sentencepiece | `0.2.2` |
 | safetensors | `0.7.0` |
 
-## 6. 系统工具与截图边界
+## 6. 系统工具与证据边界
 
 | 项目 | 状态 |
 |---|---|
 | `nvidia-smi` | 可用，return code 0 |
-| GPU topology命令 | 可用，return code 0；截图只保留表头/部分转义内容，无法重建GPU间连接矩阵 |
+| GPU topology命令 | 可用，return code 0；仅保留表头和部分转义内容，无法重建GPU间连接矩阵 |
 | NVLink status命令 | return code 0，stdout为空；仅记录该现象，不据此断言硬件一定不存在NVLink |
-| `nvcc --version` | 可用，return code 0；完整版本字符串在截图右侧被截断，未确认 |
+| `nvcc --version` | 可用，return code 0；完整版本字符串在所提供输出未完整保留，未确认 |
 | `gcc --version` | GCC 13.3.0（Ubuntu 13.3.0-6ubuntu2~24.04.1） |
 
 ## 7. 对后续Qwen/SFT/RL工作的直接约束
@@ -110,7 +110,7 @@
 
 ## 8. 删除原PDF后的信息边界
 
-本文保留了截图中对模型选择和训练路线有用、且能够可靠辨认的字段。以下内容没有被完整保留：
+本文保留了对模型选择和训练路线有用且能够可靠确认的字段。以下内容没有被完整保留：
 
 - 8卡拓扑矩阵及GPU间PCIe/NVLink关系；
 - NVCC完整版本字符串；
