@@ -9,5 +9,7 @@ build/
 artifacts/
 data/raw/
 data/processed/
+data/sft/
 checkpoints/
-
+models/
+outputs/

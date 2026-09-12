@@ -43,10 +43,21 @@ def git_state(project_root: Path) -> dict[str, object]:
 
     try:
         revision = run("rev-parse", "HEAD")
-        status = run("status", "--porcelain")
+        tracked_status = run(
+            "status", "--porcelain", "--untracked-files=no"
+        )
+        untracked = run("ls-files", "--others", "--exclude-standard")
     except (OSError, subprocess.CalledProcessError):
-        return {"commit": None, "dirty": None}
-    return {"commit": revision, "dirty": bool(status)}
+        return {
+            "commit": None,
+            "tracked_dirty": None,
+            "untracked_file_count": None,
+        }
+    return {
+        "commit": revision,
+        "tracked_dirty": bool(tracked_status),
+        "untracked_file_count": len(untracked.splitlines()) if untracked else 0,
+    }
 
 
 def scalar_check(
@@ -283,8 +294,8 @@ def main() -> int:
     source_match = bool(
         reference["source"].get("commit")
         and reference["source"].get("commit") == current_source.get("commit")
-        and reference["source"].get("dirty") is False
-        and current_source.get("dirty") is False
+        and reference["source"].get("tracked_dirty") is False
+        and current_source.get("tracked_dirty") is False
     )
     source_files_match = (
         reference.get("source_file_sha256") == current_source_hashes

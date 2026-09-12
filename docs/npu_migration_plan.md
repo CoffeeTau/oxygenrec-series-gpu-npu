@@ -83,9 +83,10 @@ CUDA_VISIBLE_DEVICES=0 bash run_gpu_v2_migration_reference.sh
 - `gpu/v2_full_gpu_reference.pt`：固定batch、FP32 logits/loss、greedy/beam、全量梯度和一次AdamW参数delta；
 - `gpu/v2_full_gpu_reference.json`：便于人工检查的摘要。
 
-导出器要求Git工作区干净，并把参考包自身SHA-256写入JSON摘要。把`.pt`参考包原样传到
-NPU服务器，并确保两端Git commit、关键源文件、Full checkpoint和SID registry的
-SHA-256一致，再运行：
+导出器要求Git commit可定位且已跟踪文件无修改，并把参考包自身SHA-256写入JSON摘要。
+`data/sft/`、`models/`和`outputs/`中的服务器产物不参与代码洁净判定；关键实现仍通过
+逐文件SHA-256强校验。把`.pt`参考包原样传到NPU服务器，并确保两端Git commit、关键
+源文件、Full checkpoint和SID registry的SHA-256一致，再运行：
 
 ```bash
 NPU_DEVICE=npu:0 bash run_npu_v2_migration_compare.sh

@@ -51,10 +51,21 @@ def git_state(project_root: Path) -> dict[str, object]:
 
     try:
         revision = run("rev-parse", "HEAD")
-        status = run("status", "--porcelain")
+        tracked_status = run(
+            "status", "--porcelain", "--untracked-files=no"
+        )
+        untracked = run("ls-files", "--others", "--exclude-standard")
     except (OSError, subprocess.CalledProcessError):
-        return {"commit": None, "dirty": None}
-    return {"commit": revision, "dirty": bool(status)}
+        return {
+            "commit": None,
+            "tracked_dirty": None,
+            "untracked_file_count": None,
+        }
+    return {
+        "commit": revision,
+        "tracked_dirty": bool(tracked_status),
+        "untracked_file_count": len(untracked.splitlines()) if untracked else 0,
+    }
 
 
 def build_fixed_batch(
@@ -182,9 +193,9 @@ def main() -> int:
 
     project_root = Path(__file__).resolve().parents[1]
     source = git_state(project_root)
-    if source["commit"] is None or source["dirty"]:
+    if source["commit"] is None or source["tracked_dirty"]:
         raise RuntimeError(
-            "GPU reference export requires a clean Git worktree with a known commit"
+            "GPU reference export requires a known commit and no tracked-file changes"
         )
     payload = {
         "schema_version": REFERENCE_SCHEMA_VERSION,
