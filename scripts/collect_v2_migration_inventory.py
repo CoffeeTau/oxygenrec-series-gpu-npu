@@ -17,6 +17,7 @@ from typing import Any
 
 DEFAULT_FILES = (
     "scripts/train_v2_pretraining_ablation_retailrocket.py",
+    "scripts/train_v2_full_migration_smoke.py",
     "scripts/run_v2_device_probe.py",
     "scripts/compare_v2_device_probes.py",
     "scripts/export_v2_gpu_reference.py",

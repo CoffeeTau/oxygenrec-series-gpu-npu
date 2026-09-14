@@ -42,19 +42,21 @@ GPU侧v1/v2方法验收已经收口，NPU迁移按以下顺序执行：
 ```text
 环境版本链与设备可见性
   → 单卡张量/backward/AdamW/checkpoint
-  → v2固定输入logits/loss/greedy/beam对齐
-  → 单步梯度与短训练
+  → v2 Full设备适配与单batch功能冒烟
+  → FP32短训练及checkpoint保存恢复
+  → BF16混合精度验证
+  → 有异常时进行精度数据下钻
   → HCCL多卡
   → 吞吐、HBM与扩展效率
 ```
 
-- 当前状态：Stage-0已在8×Ascend 950DT服务器通过；v2 Full两端独立探针入口已就绪，精度比较待执行；
-- GPU入口：`CUDA_VISIBLE_DEVICES=0 bash run_v2_device_alignment.sh gpu`；
-- NPU入口：`NPU_DEVICE=npu:0 bash run_v2_device_alignment.sh npu`；
+- 当前状态：Stage-0和v2 Full单batch NPU功能冒烟已通过；eval路径存在Transformer融合算子CPU fallback；
+- GPU训练入口：`CUDA_VISIBLE_DEVICES=0 bash run_v2_training.sh gpu fp32`；
+- NPU训练入口：`NPU_DEVICE=npu:0 bash run_v2_training.sh npu fp32`；
 - 计划与验收条件：[`docs/npu_migration_plan.md`](docs/npu_migration_plan.md)；
 - NPU环境记录：[`docs/npu_server_environment_snapshot_2026-09-11.md`](docs/npu_server_environment_snapshot_2026-09-11.md)；
 - GPU冻结证据：[`OxygenREC-v2 GPU方法复现验收报告`](实验记录/案例分析/OxygenREC-v2%20GPU方法复现验收报告.md)。
 
-下一步让两台服务器同步同一`main`，分别生成GPU/NPU探针JSON，再比较
-输入哈希、logits/loss/greedy/beam以及训练步统计；在该阶段通过前，不把GPU单侧成功
-推断成OxygenREC模型兼容，也不进入短训练、多卡或性能调优。
+下一步先完成两端FP32短训练、checkpoint保存恢复和小型摘要核验，再执行BF16；只有训练
+结果出现异常时才启用大JSON或msProbe精度下钻。FP32训练通过前不称为模型迁移完成，
+CPU fallback未处理前不进入性能调优。
