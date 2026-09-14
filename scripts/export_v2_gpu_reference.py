@@ -4,30 +4,22 @@
 from __future__ import annotations
 
 import argparse
-from collections import defaultdict
-from dataclasses import asdict
 import json
 from pathlib import Path
-import subprocess
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 import torch
 
-from oxygenrec.data import (
-    Split,
-    TemporalBoundaries,
-    build_daily_listwise_samples,
-    build_listwise_sid_model_batch,
-    load_retailrocket_events,
-)
 from oxygenrec.device import device_name, resolve_device
 from oxygenrec.migration_alignment import (
     REFERENCE_PROTOCOL,
     REFERENCE_SCHEMA_VERSION,
+    build_fixed_batch,
     deterministic_train_step,
     file_sha256,
+    git_state,
     inference_outputs,
     load_model,
     measure_forward,
@@ -36,100 +28,6 @@ from oxygenrec.migration_alignment import (
     source_file_hashes,
 )
 from oxygenrec.sid import PrefixTrie, SIDRegistry
-
-
-BEHAVIOR_WEIGHTS = (1.2, 1.5, 2.0)
-
-
-def git_state(project_root: Path) -> dict[str, object]:
-    def run(*arguments: str) -> str:
-        result = subprocess.run(
-            ["git", *arguments], cwd=project_root, check=True,
-            capture_output=True, text=True,
-        )
-        return result.stdout.strip()
-
-    try:
-        revision = run("rev-parse", "HEAD")
-        tracked_status = run(
-            "status", "--porcelain", "--untracked-files=no"
-        )
-        untracked = run("ls-files", "--others", "--exclude-standard")
-    except (OSError, subprocess.CalledProcessError):
-        return {
-            "commit": None,
-            "tracked_dirty": None,
-            "untracked_file_count": None,
-        }
-    return {
-        "commit": revision,
-        "tracked_dirty": bool(tracked_status),
-        "untracked_file_count": len(untracked.splitlines()) if untracked else 0,
-    }
-
-
-def build_fixed_batch(
-    events_path: Path,
-    checkpoint: dict,
-    registry: SIDRegistry,
-    *,
-    samples: int,
-) -> tuple[dict[str, torch.Tensor], dict[str, object]]:
-    config = restored_config(checkpoint)
-    checkpoint_args = checkpoint.get("args", {})
-    seed = int(checkpoint_args.get("seed", 17))
-    train_limit = int(checkpoint_args.get("max_train_samples", 5_000))
-    boundaries = TemporalBoundaries(**checkpoint["boundaries"])
-    events = [
-        event for event in load_retailrocket_events(events_path)
-        if event.item_id in registry.item_to_sid
-    ]
-    rows = build_daily_listwise_samples(
-        events,
-        boundaries,
-        list_size=config.max_target_items,
-        max_history=config.max_history_items,
-        max_samples_per_split={
-            Split.TRAIN: train_limit,
-            Split.VALIDATION: samples,
-            Split.TEST: 1,
-        },
-        sample_seed=seed,
-    )
-    by_split = defaultdict(list)
-    for row in rows:
-        by_split[row.split].append(row)
-    validation = by_split[Split.VALIDATION]
-    if len(validation) != samples:
-        raise RuntimeError(f"expected {samples} validation lists, got {len(validation)}")
-    raw = build_listwise_sid_model_batch(
-        validation, registry, max_history_items=config.max_history_items
-    )
-    behavior_ids = torch.tensor(raw.target_behavior_ids, dtype=torch.long)
-    sid_tokens = config.max_target_items * config.sid_levels
-    behavior_weights = torch.tensor(BEHAVIOR_WEIGHTS, dtype=torch.float32)
-    batch = {
-        "history_sids": torch.tensor(raw.history_sids, dtype=torch.long),
-        "history_padding_mask": torch.tensor(
-            raw.history_padding_mask, dtype=torch.bool
-        ),
-        "history_behavior_ids": torch.tensor(
-            raw.history_behavior_ids, dtype=torch.long
-        ),
-        "target_sids": torch.tensor(raw.target_sids, dtype=torch.long),
-        "behavior_instruction_ids": behavior_ids,
-        "token_weights": behavior_weights[behavior_ids].unsqueeze(1).expand(
-            -1, sid_tokens
-        ).clone(),
-    }
-    metadata = {
-        "sample_seed": seed,
-        "validation_samples": samples,
-        "list_size": config.max_target_items,
-        "max_history_items": config.max_history_items,
-        "boundaries": asdict(boundaries),
-    }
-    return batch, metadata
 
 
 def parse_args() -> argparse.Namespace:

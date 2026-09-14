@@ -2,22 +2,34 @@
 
 from __future__ import annotations
 
-from dataclasses import fields
+from collections import defaultdict
+from dataclasses import asdict, fields
 import hashlib
 from pathlib import Path
+import subprocess
 import time
 from typing import Any, Mapping
 
 import torch
 
 from .device import max_memory_allocated, reset_peak_memory_stats, synchronize
+from .data import (
+    Split,
+    TemporalBoundaries,
+    build_daily_listwise_samples,
+    build_listwise_sid_model_batch,
+    load_retailrocket_events,
+)
 from .model import OxygenRECConfig, OxygenRECModel
-from .sid import PrefixTrie
+from .sid import PrefixTrie, SIDRegistry
 
 
 REFERENCE_SCHEMA_VERSION = 1
 REFERENCE_PROTOCOL = "oxygenrec_v2_full_fixed_batch_fp32"
 ALIGNMENT_SOURCE_FILES = (
+    "run_v2_device_alignment.sh",
+    "scripts/run_v2_device_probe.py",
+    "scripts/compare_v2_device_probes.py",
     "scripts/export_v2_gpu_reference.py",
     "scripts/compare_device_reference.py",
     "src/oxygenrec/device.py",
@@ -27,6 +39,7 @@ ALIGNMENT_SOURCE_FILES = (
     "src/oxygenrec/data/temporal.py",
     "src/oxygenrec/sid.py",
 )
+BEHAVIOR_WEIGHTS = (1.2, 1.5, 2.0)
 
 
 def file_sha256(path: Path) -> str:
@@ -44,6 +57,104 @@ def source_file_hashes(project_root: Path) -> dict[str, str]:
         relative_path: file_sha256(project_root / relative_path)
         for relative_path in ALIGNMENT_SOURCE_FILES
     }
+
+
+def git_state(project_root: Path) -> dict[str, object]:
+    """Record the code revision without treating ignored experiment assets as source."""
+
+    def run(*arguments: str) -> str:
+        result = subprocess.run(
+            ["git", *arguments],
+            cwd=project_root,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return result.stdout.strip()
+
+    try:
+        revision = run("rev-parse", "HEAD")
+        tracked_status = run("status", "--porcelain", "--untracked-files=no")
+        untracked = run("ls-files", "--others", "--exclude-standard")
+    except (OSError, subprocess.CalledProcessError):
+        return {
+            "commit": None,
+            "tracked_dirty": None,
+            "untracked_file_count": None,
+        }
+    return {
+        "commit": revision,
+        "tracked_dirty": bool(tracked_status),
+        "untracked_file_count": len(untracked.splitlines()) if untracked else 0,
+    }
+
+
+def build_fixed_batch(
+    events_path: Path,
+    checkpoint: dict[str, Any],
+    registry: SIDRegistry,
+    *,
+    samples: int,
+) -> tuple[dict[str, torch.Tensor], dict[str, object]]:
+    """Rebuild the deterministic validation batch shared by both devices."""
+
+    config = restored_config(checkpoint)
+    checkpoint_args = checkpoint.get("args", {})
+    seed = int(checkpoint_args.get("seed", 17))
+    train_limit = int(checkpoint_args.get("max_train_samples", 5_000))
+    boundaries = TemporalBoundaries(**checkpoint["boundaries"])
+    events = [
+        event
+        for event in load_retailrocket_events(events_path)
+        if event.item_id in registry.item_to_sid
+    ]
+    rows = build_daily_listwise_samples(
+        events,
+        boundaries,
+        list_size=config.max_target_items,
+        max_history=config.max_history_items,
+        max_samples_per_split={
+            Split.TRAIN: train_limit,
+            Split.VALIDATION: samples,
+            Split.TEST: 1,
+        },
+        sample_seed=seed,
+    )
+    by_split: dict[Split, list[Any]] = defaultdict(list)
+    for row in rows:
+        by_split[row.split].append(row)
+    validation = by_split[Split.VALIDATION]
+    if len(validation) != samples:
+        raise RuntimeError(f"expected {samples} validation lists, got {len(validation)}")
+    raw = build_listwise_sid_model_batch(
+        validation, registry, max_history_items=config.max_history_items
+    )
+    behavior_ids = torch.tensor(raw.target_behavior_ids, dtype=torch.long)
+    sid_tokens = config.max_target_items * config.sid_levels
+    behavior_weights = torch.tensor(BEHAVIOR_WEIGHTS, dtype=torch.float32)
+    batch = {
+        "history_sids": torch.tensor(raw.history_sids, dtype=torch.long),
+        "history_padding_mask": torch.tensor(
+            raw.history_padding_mask, dtype=torch.bool
+        ),
+        "history_behavior_ids": torch.tensor(
+            raw.history_behavior_ids, dtype=torch.long
+        ),
+        "target_sids": torch.tensor(raw.target_sids, dtype=torch.long),
+        "behavior_instruction_ids": behavior_ids,
+        "token_weights": behavior_weights[behavior_ids]
+        .unsqueeze(1)
+        .expand(-1, sid_tokens)
+        .clone(),
+    }
+    metadata = {
+        "sample_seed": seed,
+        "validation_samples": samples,
+        "list_size": config.max_target_items,
+        "max_history_items": config.max_history_items,
+        "boundaries": asdict(boundaries),
+    }
+    return batch, metadata
 
 
 def restored_config(checkpoint: Mapping[str, Any]) -> OxygenRECConfig:

@@ -55,9 +55,10 @@ Current handoff:
 2. NPU Stage-0 passed on an 8-card Ascend 950DT server: TorchNPU/HCCL are
    available and one-card tensor, backward, optimizer, and checkpoint checks
    succeeded;
-3. the v2 Full FP32 fixed-input reference has been exported on an NVIDIA L20;
-   the next gate is NPU comparison of logits/loss/generation/gradients and one
-   optimizer step, followed by short training and HCCL/multi-card validation;
+3. the daily alignment path now uses one `main` branch and one launcher:
+   `bash run_v2_device_alignment.sh gpu` on GPU and
+   `bash run_v2_device_alignment.sh npu` on NPU; compare the two generated JSON
+   probes before short training or HCCL/multi-card validation;
 4. MoE and production-serving optimization remain deferred.
 
 See [the reuse survey](docs/reference_reuse.md) and

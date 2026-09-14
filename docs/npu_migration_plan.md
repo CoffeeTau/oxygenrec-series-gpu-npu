@@ -1,6 +1,6 @@
 # OxygenREC GPU→NPU迁移与验收计划
 
-> 状态：Stage-0已于2026-09-11在8×Ascend 950DT服务器实测通过；GPU侧v2 Full固定参考已于2026-09-12在NVIDIA L20生成，待NPU复算比较。
+> 状态：Stage-0已于2026-09-11在8×Ascend 950DT服务器实测通过；GPU/NPU两端独立探针入口已就绪，待同一`main`版本实跑比较。
 > GPU方法基线：[`OxygenREC-v2 GPU方法复现验收报告`](../实验记录/案例分析/OxygenREC-v2%20GPU方法复现验收报告.md)
 > NPU环境：[`Ascend 950DT服务器环境快照`](npu_server_environment_snapshot_2026-09-11.md)
 
@@ -23,8 +23,8 @@ v1 reference不能冒充v2证据。
 | Stage-0A | 驱动/固件、CANN、PyTorch、TorchNPU、可见设备 | 环境JSON与`npu-smi info` | `[通过]`；8卡可见、HCCL可用，ATC精确版本待补 |
 | Stage-0B | 单卡矩阵计算、backward、AdamW step、checkpoint保存恢复 | `OK stage=npu_single_card` | `[通过]`；梯度非零、参数更新、checkpoint一致 |
 | Stage-0.5 | 迁移入口、依赖、平台调用和精度敏感API清单 | GPU/NPU各自静态清单；官方分析工具原始报告另存 | `[GPU清单已生成-NPU待采集]`；项目内清单不等于算子支持证明 |
-| Stage-1 | v2固定batch的logits、weighted loss、greedy和beam GPU/NPU对齐 | 同commit/checkpoint/registry哈希；误差与离散匹配报告 | `[GPU参考已冻结-NPU待比较]` |
-| Stage-2 | v2单batch训练步：全量梯度与参数delta对齐 | 梯度有限且误差受控 | `[GPU参考已冻结-NPU待比较]` |
+| Stage-1 | v2固定batch的logits、weighted loss、greedy和beam GPU/NPU对齐 | 两端独立JSON的commit/输入哈希一致；误差与离散匹配报告 | `[统一入口就绪-待两端实跑]` |
+| Stage-2 | v2单batch训练步：梯度与参数delta初筛 | 两端逐张量统计量和固定采样点误差受控 | `[紧凑探针就绪-待两端实跑]` |
 | Stage-3 | 20步短训练与恢复训练 | loss曲线、checkpoint恢复一致 | `[未开始]` |
 | Stage-4 | 多卡可见性与HCCL通信 | 每卡独立计算、collective通过 | `[未开始]` |
 | Stage-5 | 8卡吞吐、HBM、扩展效率 | 固定配置性能报告 | `[未开始]` |
@@ -71,31 +71,49 @@ size和beam width。优先对齐顺序为：teacher-forcing logits → weighted 
 列表 → beam列表 → 单步梯度。EA-TOSD checkpoint在Full基线通过后再作为第二个对象，
 避免同时引入设备误差和后训练差异。
 
-先在GPU服务器以待迁移代码生成唯一参考包：
+日常主流程只维护`main`。MacBook推送一次后，两台服务器分别快进同步同一份代码；
+不复制代码目录、不维护GPU/NPU分支，也不在两台服务器之间传递参考包。
+
+GPU服务器运行：
 
 ```bash
-CUDA_VISIBLE_DEVICES=0 bash run_gpu_v2_migration_reference.sh
+git pull origin main
+CUDA_VISIBLE_DEVICES=0 bash run_v2_device_alignment.sh gpu
 ```
 
-这一步同时生成：
+NPU服务器运行：
+
+```bash
+git pull origin main
+NPU_DEVICE=npu:0 bash run_v2_device_alignment.sh npu
+```
+
+两端入口会生成各自的静态清单以及结构相同的结果：
 
 - `support_inventory/gpu/v2_migration_inventory.json/.md`：项目内静态迁移清单；
-- `gpu/v2_full_gpu_reference.pt`：固定batch、FP32 logits/loss、greedy/beam、全量梯度和一次AdamW参数delta；
-- `gpu/v2_full_gpu_reference.json`：便于人工检查的摘要。
+- `support_inventory/npu/v2_migration_inventory.json/.md`：NPU环境中的静态迁移清单；
+- `gpu/v2_full_gpu_probe.json`：GPU独立探针结果；
+- `npu/v2_full_npu_probe.json`：NPU独立探针结果。
 
-导出器要求Git commit可定位且已跟踪文件无修改，并把参考包自身SHA-256写入JSON摘要。
-`data/sft/`、`models/`和`outputs/`中的服务器产物不参与代码洁净判定；关键实现仍通过
-逐文件SHA-256强校验。把`.pt`参考包原样传到NPU服务器，并确保两端Git commit、关键
-源文件、Full checkpoint和SID registry的SHA-256一致，再运行：
+探针要求Git commit可定位且已跟踪文件无修改，并在JSON中记录commit、关键源文件、
+events、Full checkpoint与SID registry的SHA-256。比较前先核验这些前置项完全一致，
+再直接比较完整teacher-forcing logits、loss、greedy/beam SID和beam scores；梯度与参数
+delta采用逐张量统计量和固定采样点进行首轮筛查。
+
+取得两份JSON后，可在不需要PyTorch的环境运行：
 
 ```bash
-NPU_DEVICE=npu:0 bash run_npu_v2_migration_compare.sh
+python3 scripts/compare_v2_device_probes.py \
+  --gpu v2_full_gpu_probe.json \
+  --npu v2_full_npu_probe.json \
+  --output v2_full_gpu_npu_comparison.json
 ```
 
-NPU入口会生成自己的静态清单和
-`npu/v2_full_comparison.json`。默认连续量容差为`atol=rtol=5e-3`；greedy与beam SID
-要求完全一致。报告会分别保留logits、loss、各层loss、beam score、梯度和参数delta
-差异。若失败，先保留报告并定位首个差异，不立即调参或改成BF16。
+默认连续量容差为`atol=rtol=5e-3`，greedy与beam SID要求完全一致。若输入哈希不一致，
+先修复服务器资产；若前向或训练步出现差异，再使用已有
+`run_gpu_v2_migration_reference.sh`与`run_npu_v2_migration_compare.sh`执行逐tensor严格诊断。
+严格参考包流程是异常下钻工具，不再是日常必经步骤。失败时先保留报告并定位首个差异，
+不立即调大容差、改成BF16或开始调参。
 
 `collect_v2_migration_inventory.py`只是可审计的源码预检查，不替代官方PyTorch
 Analyse、msProbe或目标NPU实跑。若目标环境提供官方工具，原始报告需与本项目清单并列
@@ -110,5 +128,5 @@ Analyse、msProbe或目标NPU实跑。若目标环境提供官方工具，原始
 - v2模型在NPU上的数值误差、生成一致性、显存和吞吐；
 - checkpoint是否能在目标环境直接恢复。
 
-Stage-0基础链与GPU固定参考已经通过，但NPU数值比较尚未执行。在NPU比较报告通过前
+Stage-0基础链与GPU固定参考已经通过，但新统一入口的两端数值比较尚未执行。在比较报告通过前
 不安装/升级依赖、不启动短训练或多卡，也不声称OxygenREC已完成NPU兼容。
