@@ -1,6 +1,6 @@
 # OxygenREC GPU→NPU迁移与验收计划
 
-> 状态：Stage-0与v2 Full单batch NPU功能冒烟已通过；短训练、模型保存恢复和BF16仍待目标服务器验证。
+> 状态：Stage-0、v2 Full单batch NPU功能冒烟及GPU/NPU FP32短训练保存恢复均已通过；下一步验证BF16。
 > GPU方法基线：[`OxygenREC-v2 GPU方法复现验收报告`](../实验记录/案例分析/OxygenREC-v2%20GPU方法复现验收报告.md)
 > NPU环境：[`Ascend 950DT服务器环境快照`](npu_server_environment_snapshot_2026-09-11.md)
 
@@ -24,9 +24,9 @@ v1 reference不能冒充v2证据。
 | Stage-0B | 单卡矩阵计算、backward、AdamW step、checkpoint保存恢复 | `OK stage=npu_single_card` | `[通过]`；梯度非零、参数更新、checkpoint一致 |
 | 迁移分析 | 依赖、平台调用、算子支持和已知不支持场景 | 项目静态清单、目标机运行信息；官方分析报告另存 | `[部分完成]`；单batch发现Transformer融合算子CPU fallback，官方分析工具待补 |
 | 模型迁移 | `torch_npu`注册、`npu`设备选择、模型与数据移动 | 同一代码可选择`cuda`或`npu`，不含目标路径CUDA硬编码 | `[v2 Full主链完成]`；不代表其他实验脚本全部完成 |
-| FP32模型训练 | Full checkpoint续训20步并保存、恢复、再次前向 | loss/梯度有限，checkpoint逐值恢复且可继续前向 | `[入口就绪-待服务器实跑]` |
-| BF16特性适配 | 在同一训练入口开启autocast | BF16 loss/梯度有限，checkpoint可保存恢复 | `[代码就绪-FP32通过后执行]` |
-| 精度调试 | 比较GPU/NPU训练摘要；异常时下钻Module/API/tensor | 输入一致、loss趋势和验证指标误差可解释 | `[未开始]`；单batch大JSON仅作为诊断资产 |
+| FP32模型训练 | Full checkpoint续训20步并保存、恢复、再次前向 | loss/梯度有限，checkpoint逐值恢复且可继续前向 | `[通过]`；两端同commit/输入，20步训练及保存恢复均通过 |
+| BF16特性适配 | 在同一训练入口开启autocast | BF16 loss/梯度有限，checkpoint可保存恢复 | `[代码就绪-下一步服务器实跑]` |
+| 精度调试 | 比较GPU/NPU训练摘要；异常时下钻Module/API/tensor | 输入一致、loss趋势和验证指标误差可解释 | `[FP32摘要初步比较通过]`；尚非最终验证指标对齐 |
 | 多卡与性能 | HCCL训练、吞吐、HBM与扩展效率 | 多卡正确性与固定配置性能报告 | `[未开始]` |
 
 任何阶段失败都先停在该阶段，记录首个可操作原因；静态检查不算目标NPU通过。
@@ -82,6 +82,8 @@ CUDA_VISIBLE_DEVICES=0 bash run_v2_training.sh gpu fp32
 
 ```bash
 git pull --ff-only origin main
+export LD_LIBRARY_PATH=/usr/lib64:${LD_LIBRARY_PATH:-}
+source /usr/local/Ascend/driver/bin/setenv.bash
 source /usr/local/Ascend/cann/set_env.sh
 NPU_DEVICE=npu:0 bash run_v2_training.sh npu fp32
 ```
@@ -100,6 +102,9 @@ checkpoint与完整`training.log`保留在服务器，不作为日常交付内�
 
 ```bash
 CUDA_VISIBLE_DEVICES=0 bash run_v2_training.sh gpu bf16
+export LD_LIBRARY_PATH=/usr/lib64:${LD_LIBRARY_PATH:-}
+source /usr/local/Ascend/driver/bin/setenv.bash
+source /usr/local/Ascend/cann/set_env.sh
 NPU_DEVICE=npu:0 bash run_v2_training.sh npu bf16
 ```
 
@@ -114,12 +119,21 @@ Analyse、msProbe或目标NPU实跑。若目标环境提供官方工具，原始
 
 ## 5. 当前已知环境与未验证项
 
-- 已知：8×`Ascend950DT_9581`、PyTorch `2.10.0`、TorchNPU
-  `2.10.0.post4.dev20260715`、CANN路径`9.0.T550`，`torch.npu`与HCCL接口可用；
+- 本次FP32短训练：`Ascend950DT_9572`、Python `3.11.6`、PyTorch `2.10.0+cpu`、
+  TorchNPU `2.10.0.post5.dev20260910`；硬件仍为950DT，但TorchNPU版本已不同于旧环境快照，
+  最终验收前需重新采集完整NPU环境信息；
 - 未确认：ATC精确版本、驱动/固件完整版本以及该开发版软件栈的正式兼容矩阵；
 - 已验证：Full checkpoint可在NPU加载；单batch FP32前向、生成、反向与AdamW step完成，loss为`6.092293`；
-- 已知问题：`aten::_transformer_encoder_layer_fwd`在本次eval路径回退CPU，CANN/HDK也输出版本相关提示；
-- 未验证：真实`model.train()`路径是否仍有CPU fallback、BF16、短训练保存恢复、显存和吞吐。
+- 已验证：GPU/NPU使用commit `9633639329cc569c18b458683980ecef38d0c9f5`和完全相同的
+  events、起始checkpoint及SID registry，分别完成20步FP32训练、梯度计算、checkpoint保存恢复与恢复后前向；
+- FP32摘要：GPU/NPU平均loss分别为`5.707635`/`5.707190`，逐步loss平均绝对差
+  `0.008988`，最大绝对差`0.023938`；这些结果通过短训练迁移门槛，但不等价于最终精度对齐；
+- 已知问题：旧的eval单batch路径报告`aten::_transformer_encoder_layer_fwd`回退CPU；本次短训练摘要
+  不含算子级执行位置，是否完全消除fallback仍需完整运行日志或Profiler确认；
+- 环境前提：本次NPU运行曾因TorchNPU后端动态库未正确加载而失败，补充`/usr/lib64`并依次加载
+  driver与CANN环境后成功；
+- 未验证：BF16、固定验证指标对齐、正式显存/吞吐和多卡。
 
-当前只能标记为`[v2 Full单batch NPU功能冒烟通过]`。FP32短训练及保存恢复通过前不称为
-模型迁移完成；两端训练摘要尚未比较前不进入正式精度结论；CPU fallback未处理前不进入性能调优。
+当前标记为`[v2 Full FP32迁移短训练通过]`。独立设备训练使用各自随机数实现，输出checkpoint
+哈希不要求相同；只要求起始代码和输入一致、训练量有限且保存恢复成功。BF16和固定验证指标通过前
+不称为最终精度对齐；CPU fallback未确认前不进入性能调优。
