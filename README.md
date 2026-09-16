@@ -55,10 +55,11 @@ Current handoff:
 2. NPU Stage-0 passed on an 8-card Ascend 950DT server: TorchNPU/HCCL are
    available and one-card tensor, backward, optimizer, and checkpoint checks
    succeeded;
-3. the v2 Full GPU/NPU FP32 20-step training smoke and checkpoint reload now
-   pass from the same commit and input hashes; the next gate uses the same
-   launcher with `bf16`, followed by controlled validation-metric comparison,
-   while detailed tensor diagnosis remains conditional on a discrepancy;
+3. the v2 Full GPU/NPU FP32 and BF16 20-step training/checkpoint reload gates
+   pass from the same commits and input hashes; the next gate runs the same
+   frozen checkpoint and deterministic validation cohort on both devices with
+   `bash run_v2_validation.sh <gpu|npu> all`, while detailed tensor diagnosis
+   remains conditional on a metric or output-fingerprint discrepancy;
 4. MoE and production-serving optimization remain deferred.
 
 See [the reuse survey](docs/reference_reuse.md) and
