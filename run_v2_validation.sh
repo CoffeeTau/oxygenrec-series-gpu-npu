@@ -60,6 +60,7 @@ for current_precision in "${precisions[@]}"; do
         --samples "$samples" \
         --batch-size "$batch_size" \
         --beam-width "$beam_width" \
+        --cases-output "$output_dir/v2_full_${platform}_${current_precision}_validation_cases.json" \
         --output "$output_dir/v2_full_${platform}_${current_precision}_validation_summary.json" \
         2>&1 | tee "$output_dir/validation.log"
 done

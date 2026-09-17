@@ -58,6 +58,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--checkpoint", type=Path, required=True)
     parser.add_argument("--sid-registry", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument(
+        "--cases-output",
+        type=Path,
+        help="optional compact per-case target/greedy/beam output for changed-case drilldown",
+    )
     parser.add_argument("--samples", type=int, default=32)
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--beam-width", type=int, default=5)
@@ -142,6 +147,7 @@ def main() -> int:
     targets: list[list[int]] = []
     greedy: list[list[int]] = []
     beams: list[list[list[int]]] = []
+    beam_scores: list[list[float]] = []
     losses: list[float] = []
     logits_finite = True
     synchronize(device)
@@ -180,6 +186,7 @@ def main() -> int:
                 )
                 greedy.extend(generated.cpu().tolist())
                 beams.extend(beam.semantic_ids.cpu().tolist())
+                beam_scores.extend(beam.scores.float().cpu().tolist())
     synchronize(device)
     elapsed = time.perf_counter() - started
     if not logits_finite:
@@ -247,6 +254,33 @@ def main() -> int:
         json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
+    if args.cases_output is not None:
+        case_payload = {
+            "schema_version": 1,
+            "protocol": PROTOCOL + "_cases",
+            "platform": args.platform,
+            "precision": args.precision,
+            "source_commit": source["commit"],
+            "inputs": summary["inputs"],
+            "fingerprints": summary["fingerprints"],
+            "cases": [
+                {
+                    "case_index": index,
+                    "target": target,
+                    "greedy": greedy_path,
+                    "beam": beam_paths,
+                    "beam_scores": scores,
+                }
+                for index, (target, greedy_path, beam_paths, scores) in enumerate(
+                    zip(targets, greedy, beams, beam_scores, strict=True)
+                )
+            ],
+        }
+        args.cases_output.parent.mkdir(parents=True, exist_ok=True)
+        args.cases_output.write_text(
+            json.dumps(case_payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
     beam_hit = metrics["beam_exact_list_hit_rate"][str(args.beam_width)]
     print(
         "OK stage=v2_fixed_validation "
@@ -255,7 +289,7 @@ def main() -> int:
         f"sid_recall={metrics['sid_recall']:.6f} "
         f"exact_list_rate={metrics['exact_list_rate']:.6f} "
         f"beam_exact_list_hit_at_{args.beam_width}={beam_hit:.6f} "
-        f"summary={args.output}"
+        f"summary={args.output} cases={args.cases_output}"
     )
     return 0
 

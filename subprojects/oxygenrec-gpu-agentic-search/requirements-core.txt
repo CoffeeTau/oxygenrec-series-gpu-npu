@@ -1,0 +1,2 @@
+# Install a CUDA-compatible PyTorch build separately for the target GPU/driver.
+numpy>=1.26

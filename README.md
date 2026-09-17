@@ -56,10 +56,11 @@ Current handoff:
    available and one-card tensor, backward, optimizer, and checkpoint checks
    succeeded;
 3. the v2 Full GPU/NPU FP32 and BF16 20-step training/checkpoint reload gates
-   pass from the same commits and input hashes; the next gate runs the same
-   frozen checkpoint and deterministic validation cohort on both devices with
-   `bash run_v2_validation.sh <gpu|npu> all`, while detailed tensor diagnosis
-   remains conditional on a metric or output-fingerprint discrepancy;
+   pass from the same commits and input hashes; fixed validation also passed
+   input, finite-value, legality, mean-loss, and aggregate-metric gates. FP32
+   target/greedy/beam fingerprints match, while BF16 target/greedy match but
+   beam differs, so the next gate is a compact changed-case drilldown rather
+   than a full tensor dump;
 4. MoE and production-serving optimization remain deferred.
 
 See [the reuse survey](docs/reference_reuse.md) and

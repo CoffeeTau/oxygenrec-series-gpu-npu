@@ -1,0 +1,9 @@
+# Optional dependencies for local Qwen reasoning, feature caching and LoRA checks.
+# Keep the server's working PyTorch build unchanged.
+accelerate
+huggingface-hub
+peft
+requests
+safetensors
+sentencepiece
+transformers>=4.51,<5

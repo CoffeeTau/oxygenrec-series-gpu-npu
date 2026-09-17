@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+.DS_Store
+.venv/
+
+data/raw/
+data/processed/
+models/
+checkpoints/
+outputs/
+
+*.pt
+*.pth
+*.safetensors
+*.bin
