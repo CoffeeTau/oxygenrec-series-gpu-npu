@@ -211,14 +211,18 @@ v2 Full 单模型，从已通过的 Full checkpoint 继续；默认不限制公�
 GPU服务器资源预检：
 
 ```bash
-CUDA_VISIBLE_DEVICES=0 V2_FULL_TRAIN_MAX_SAMPLES=50000 \
+CUDA_VISIBLE_DEVICES=0 \
+  V2_FULL_TRAIN_OUTPUT_ROOT=checkpoints/full_training_preflight/v2_full \
+  V2_FULL_TRAIN_MAX_SAMPLES=50000 \
   V2_FULL_TRAIN_EPOCHS=1 bash run_v2_full_training.sh gpu bf16
 ```
 
 NPU服务器先加载本节前述 driver/CANN 环境，再执行：
 
 ```bash
-NPU_DEVICE=npu:0 V2_FULL_TRAIN_MAX_SAMPLES=50000 \
+NPU_DEVICE=npu:0 \
+  V2_FULL_TRAIN_OUTPUT_ROOT=checkpoints/full_training_preflight/v2_full \
+  V2_FULL_TRAIN_MAX_SAMPLES=50000 \
   V2_FULL_TRAIN_EPOCHS=1 bash run_v2_full_training.sh npu bf16
 ```
 
