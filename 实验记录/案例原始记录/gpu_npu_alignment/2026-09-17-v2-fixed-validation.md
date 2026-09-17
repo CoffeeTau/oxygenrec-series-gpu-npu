@@ -51,8 +51,9 @@ checkpoints/device_validation/v2_full/npu/bf16/v2_full_npu_bf16_validation_summa
 ## 判断与边界
 
 按服务器运行前冻结的门槛，四次运行通过硬门槛、连续量和离散聚合门槛；FP32
-固定验证可以标为通过。BF16 不直接标为失败，但必须按既定规则下钻**beam 发生变化的
-固定案例**，在确认变化范围和原因前不宣称 BF16 生成路径完全对齐。
+固定验证可以标为通过。BF16 不直接标为失败；beam 发生变化的固定案例可在需要
+逐样本一致性时下钻，但不阻塞完整训练及性能采集。在确认变化范围和原因前不宣称
+BF16 生成路径完全对齐。
 
 `SID recall=1/64`、`exact-list=0/32` 体现的是当前公开代理 checkpoint 的质量限制，
 不是 GPU/NPU 差距；它不能被写成论文效果复现。终端的 nested-tensor warning 仅说明
@@ -62,7 +63,7 @@ checkpoints/device_validation/v2_full/npu/bf16/v2_full_npu_bf16_validation_summa
 收益。NPU validation 记录的 TorchNPU 开发版日期与此前训练/环境记录不完全相同；
 正式性能测试前还需重新采集运行环境和算子执行位置。
 
-## 下一步
+## 可选诊断（不阻塞完整训练）
 
 1. 已在后续提交中为固定验证增加小型逐案例文件，并新增
    `scripts/compare_v2_validation_cases.py`，比较时只输出发生变化的案例，不上传全量
@@ -70,19 +71,19 @@ checkpoints/device_validation/v2_full/npu/bf16/v2_full_npu_bf16_validation_summa
 2. 用更新后的相同 commit、输入与精度在 GPU/NPU 各重跑一次，先确定变化案例数、候选集合
    与顺序的差异；如只是近似并列排序，记录 margin；如涉及不稳定或非法路径，再深入
    到 beam 步级数值。
-3. 完成 BF16 差异分类和 NPU CPU fallback/算子位置核实后，另开正式性能协议：
-   warmup、同步计时、重复运行、显存口径、Profiler 和同一有效 batch。当前日志不能
-   代替该阶段。
+3. 主线直接进入按epoch训练，再以真实训练负载采集性能。BF16差异分类仅在指标回退、
+   非法输出或需要逐样本一致性证据时启动；CPU fallback/算子位置属于性能剖析内容。
+   当前日志不能代替正式性能基线。
 
-更新代码后，两端只需重跑 BF16；`run_v2_validation.sh` 会同时生成 summary 和小型
-cases 文件：
+只有将来需要定位 BF16 beam 时，两端才需重跑 BF16；设定
+`V2_VALIDATION_CASES=1` 后，`run_v2_validation.sh` 才会额外生成小型 cases 文件：
 
 ```bash
 # GPU服务器
-CUDA_VISIBLE_DEVICES=0 bash run_v2_validation.sh gpu bf16
+CUDA_VISIBLE_DEVICES=0 V2_VALIDATION_CASES=1 bash run_v2_validation.sh gpu bf16
 
 # NPU服务器（环境脚本仍需按迁移计划加载）
-NPU_DEVICE=npu:0 bash run_v2_validation.sh npu bf16
+NPU_DEVICE=npu:0 V2_VALIDATION_CASES=1 bash run_v2_validation.sh npu bf16
 ```
 
 把两份小型 cases 文件放到同一台机器后执行：

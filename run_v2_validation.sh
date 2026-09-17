@@ -50,6 +50,10 @@ fi
 for current_precision in "${precisions[@]}"; do
     output_dir="$output_root/$platform/$current_precision"
     mkdir -p "$output_dir"
+    cases_args=()
+    if [[ "${V2_VALIDATION_CASES:-0}" == "1" ]]; then
+        cases_args+=(--cases-output "$output_dir/v2_full_${platform}_${current_precision}_validation_cases.json")
+    fi
     "$python_bin" scripts/evaluate_v2_fixed_validation.py \
         --platform "$platform" \
         --device "$device" \
@@ -60,7 +64,7 @@ for current_precision in "${precisions[@]}"; do
         --samples "$samples" \
         --batch-size "$batch_size" \
         --beam-width "$beam_width" \
-        --cases-output "$output_dir/v2_full_${platform}_${current_precision}_validation_cases.json" \
+        "${cases_args[@]}" \
         --output "$output_dir/v2_full_${platform}_${current_precision}_validation_summary.json" \
         2>&1 | tee "$output_dir/validation.log"
 done

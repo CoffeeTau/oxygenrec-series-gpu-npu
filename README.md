@@ -59,8 +59,8 @@ Current handoff:
    pass from the same commits and input hashes; fixed validation also passed
    input, finite-value, legality, mean-loss, and aggregate-metric gates. FP32
    target/greedy/beam fingerprints match, while BF16 target/greedy match but
-   beam differs, so the next gate is a compact changed-case drilldown rather
-   than a full tensor dump;
+   beam differs; this is an optional diagnostic, not a blocker for full-epoch
+   training on the same public-data proxy;
 4. MoE and production-serving optimization remain deferred.
 
 See [the reuse survey](docs/reference_reuse.md) and
