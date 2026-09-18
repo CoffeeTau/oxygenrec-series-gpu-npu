@@ -25,7 +25,7 @@ def resolve_device(device_spec: str) -> torch.device:
         )
     if device_type == "npu":
         try:
-            importlib.import_module("torch_npu")
+            importlib.import_module("torch_npu") # 请求 NPU 时动态导入 torch_npu
         except ImportError as error:
             raise RuntimeError(
                 "npu device requested but torch_npu cannot be imported"

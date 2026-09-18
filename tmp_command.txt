@@ -1,0 +1,23 @@
+GPU：
+
+  git pull --ff-only origin main
+
+  CUDA_VISIBLE_DEVICES=0 \
+  V2_FULL_TRAIN_OUTPUT_ROOT=checkpoints/full_training_preflight/v2_full \
+  V2_FULL_TRAIN_MAX_SAMPLES=50000 \
+  V2_FULL_TRAIN_EPOCHS=1 \
+  bash run_v2_full_training.sh gpu bf16
+
+NPU：
+
+  git pull --ff-only origin main
+
+  export LD_LIBRARY_PATH=/usr/lib64:${LD_LIBRARY_PATH:-}
+  source /usr/local/Ascend/driver/bin/setenv.bash
+  source /usr/local/Ascend/cann/set_env.sh
+
+  NPU_DEVICE=npu:0 \
+  V2_FULL_TRAIN_OUTPUT_ROOT=checkpoints/full_training_preflight/v2_full \
+  V2_FULL_TRAIN_MAX_SAMPLES=50000 \
+  V2_FULL_TRAIN_EPOCHS=1 \
+  bash run_v2_full_training.sh npu bf16
