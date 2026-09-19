@@ -1,6 +1,6 @@
 # OxygenREC GPU→NPU迁移与验收计划
 
-> 状态：Stage-0、FP32/BF16短训练保存恢复及固定验证的基本门槛已通过；下一步进入单模型完整epoch训练与性能采集。
+> 状态：Stage-0、FP32/BF16短训练、固定验证及GPU/NPU各5万样本BF16单epoch资源预检已通过；下一步跑完整train split并采集性能基线。
 > GPU方法基线：[`OxygenREC-v2 GPU方法复现验收报告`](../实验记录/案例分析/OxygenREC-v2%20GPU方法复现验收报告.md)
 > NPU环境：[`Ascend 950DT服务器环境快照`](npu_server_environment_snapshot_2026-09-11.md)
 
@@ -28,7 +28,7 @@ v1 reference不能冒充v2证据。
 | BF16特性适配 | 在同一训练入口开启autocast | BF16 loss/梯度有限，checkpoint可保存恢复 | `[通过]`；两端20步训练、梯度及保存恢复均通过 |
 | 固定验证集比较 | 同一冻结checkpoint、validation cohort和解码配置 | 列表指标、有限性与合法性处于预设范围 | `[基本通过]`；BF16 beam指纹差异非阻塞 |
 | 精度调试 | 出现NaN、任务指标回退或不可接受的数值差异时下钻 | 找到首个超差模块/算子并形成处置结论 | `[按需触发]`；大JSON仅作为诊断资产 |
-| 完整训练 | 单模型完整train split、按epoch保存及可续训 | 有限loss、checkpoint和验证指标 | `[入口就绪-待服务器实跑]` |
+| 完整训练 | 单模型完整train split、按epoch保存及可续训 | 有限loss、checkpoint和验证指标 | `[5万样本预检通过；完整split待跑]` |
 | 多卡与性能 | 真实训练吞吐、HBM与扩展效率 | 固定配置的Profiler/性能报告与优化前后对照 | `[待采集基线]`；HCCL多卡训练未验证 |
 
 环境、运行、loss有限性、保存恢复等硬门槛失败时先停下处理；非阻塞的输出细节差异
@@ -208,6 +208,12 @@ v2 Full 单模型，从已通过的 Full checkpoint 继续；默认不限制公�
 跑完整 train split。这个有界规模步骤是资源预检，不是新的精度对齐门槛。GPU与NPU
 使用同样的输入与超参，比较训练趋势与验证任务指标，不要求独立训练出的权重逐值一致。
 
+2026-09-18服务器运行结果：两端同commit `032135d384ad105ab40afe4bfa1ef47e681d423f`、
+同输入哈希、同5万样本和782步，均保存epoch checkpoint且loss全为有限值。GPU/NPU
+epoch平均loss为`4.891285`/`4.887688`，绝对差约`0.003597`、相对差约`0.0735%`；
+观察吞吐为`2274.678`/`1753.765`样本每秒，属于端到端有界epoch记录，非正式benchmark。
+终端每100步的`mean_loss`是截至当前步的累计均值，不能代替逐step精度证据。
+
 GPU服务器资源预检：
 
 ```bash
@@ -232,6 +238,35 @@ NPU_DEVICE=npu:0 \
 并拒绝精度、样本上限或数据哈希不一致的续训。不要把5万样本的有界预检权重直接当作
 完整数据正式训练的起点。
 
+若需要排查逐 step 的 GPU/NPU loss，而不是终端中每100步的累计平均 loss，可对同一
+**起始 Full checkpoint**（不要使用两端各自训练后的权重）运行独立的20步诊断：
+
+```bash
+python scripts/diagnose_v2_step_loss.py --platform gpu --device cuda:0 \
+  --precision bf16 --dropout-mode disabled \
+  --events data/raw/retailrocket/events.csv \
+  --checkpoint checkpoints/retailrocket_v2_pretraining_ablation_smoke/full-epoch-1.pt \
+  --sid-registry data/processed/rq_comparison/w256_kmeanspp/sid_registry.json \
+  --output checkpoints/step_diagnostic/gpu_bf16_dropout_disabled.json
+```
+
+NPU端使用相同参数，仅把 `--platform gpu --device cuda:0` 改为
+`--platform npu --device npu:0`，输出文件改为 `npu_bf16_dropout_disabled.json`。
+把两份JSON放到同一机器后运行：
+
+```bash
+python scripts/compare_v2_step_loss.py \
+  checkpoints/step_diagnostic/gpu_bf16_dropout_disabled.json \
+  checkpoints/step_diagnostic/npu_bf16_dropout_disabled.json \
+  --absolute-tolerance 0.001 --relative-tolerance 0.001
+```
+
+诊断会校验输入文件、源码及每步实际 batch 的指纹，逐步报告绝对与相对误差。
+`--dropout-mode disabled` 仅用 `eval()` 关闭随机 dropout，仍执行反向和 AdamW 更新；
+它不会产生正式训练权重，也不能代表正式训练的质量或性能。如果这一组已超差，
+只在此时再换 `--precision fp32` 做同样的两端诊断；若首步即超差，再进入模块/算子级
+精度定位。此排查与完整数据训练、性能 profiling 并行，不作为它们的前置门槛。
+
 完整训练产物再运行 `run_v2_validation.sh`，通过 `V2_FULL_CHECKPOINT` 指向新权重；
 用更大的固定 validation（例如 `V2_VALIDATION_SAMPLES=512`）观察质量趋势。该公开数据
 代理模型当前远小于论文3B目标，因此“当前模型完整epoch训练”和“论文规模完整复现”是
@@ -241,3 +276,41 @@ NPU_DEVICE=npu:0 \
 Profiler区分数据准备/H2D、算子计算、CPU fallback与同步等待，再按主瓶颈依次做
 数据加载、NPU亲和算子、内存或通信优化。每次优化保持同一任务和batch，报告正确性
 回归与前后性能。四次 correctness-only 固定验证耗时不可作为性能基线。
+
+### 6.1 单卡BF16基础性能摸底
+
+第一轮不立即打开Profiler，先用同一初始checkpoint做稳态训练基准。基准不保存权重，
+默认对batch `64/128/256`分别预热20步、测量100步、重复3次；计时路径保持正式训练器
+当前“每步读取一次loss到主机”的行为，以复现现状而不是提前混入优化。GPU端执行：
+
+```bash
+CUDA_VISIBLE_DEVICES=0 bash run_v2_performance_baseline.sh gpu bf16
+```
+
+NPU端加载driver/CANN环境后执行：
+
+```bash
+NPU_DEVICE=npu:0 bash run_v2_performance_baseline.sh npu bf16
+```
+
+输出分别为：
+
+- `checkpoints/performance_baseline/v2_full/gpu_bf16_performance.json`
+- `checkpoints/performance_baseline/v2_full/npu_bf16_performance.json`
+
+将两份结果放到同一机器后比较：
+
+```bash
+python scripts/compare_v2_performance_baselines.py \
+  checkpoints/performance_baseline/v2_full/gpu_bf16_performance.json \
+  checkpoints/performance_baseline/v2_full/npu_bf16_performance.json
+```
+
+基准会校验commit、源码、输入哈希和完整工作负载，报告各batch的吞吐中位数、step时延、
+重复运行变异系数及峰值allocated显存。不同硬件及软件栈的比值是工程观察，不解释为
+同规格硬件结论。结果按以下顺序决策：
+
+1. 吞吐随batch明显增长：当前主要是小模型/小batch下的利用率或下发开销，先扩大batch；
+2. 吞吐很早变平且NPU明显落后：在该batch上采集少量稳态step的Ascend PyTorch Profiler；
+3. 重复变异系数大于约`5%`：先排查共享机器负载、热身、功耗或频率波动，再谈优化；
+4. Profiler确认format转换、CPU fallback或频繁同步后，再分别处理，不能仅凭warning改模型。
