@@ -139,3 +139,34 @@ GPU 重新运行：
   python scripts/compare_v2_performance_baselines.py \
     checkpoints/performance_baseline/steady_bs1024_gpu_w60_m60_20260921/gpu_bf16_performance.json \
     checkpoints/performance_baseline/steady_bs1024_npu_w60_m60_20260921/npu_bf16_performance.json
+
+batch 2048
+
+GPU：
+
+  CUDA_VISIBLE_DEVICES=0 \
+  CUDA_DEVICE=cuda:0 \
+  V2_PERF_OUTPUT_ROOT=checkpoints/performance_baseline/steady_bs2048_gpu_w30_m30_20260921 \
+  V2_PERF_MAX_SAMPLES=130000 \
+  V2_PERF_BATCH_SIZES="2048" \
+  V2_PERF_WARMUP_STEPS=30 \
+  V2_PERF_MEASURED_STEPS=30 \
+  V2_PERF_REPEATS=3 \
+  bash run_v2_performance_baseline.sh gpu bf16
+
+  NPU：
+
+  NPU_DEVICE=npu:0 \
+  V2_PERF_OUTPUT_ROOT=checkpoints/performance_baseline/steady_bs2048_npu_w30_m30_20260921 \
+  V2_PERF_MAX_SAMPLES=130000 \
+  V2_PERF_BATCH_SIZES="2048" \
+  V2_PERF_WARMUP_STEPS=30 \
+  V2_PERF_MEASURED_STEPS=30 \
+  V2_PERF_REPEATS=3 \
+  bash run_v2_performance_baseline.sh npu bf16
+
+  比较：
+
+  python scripts/compare_v2_performance_baselines.py \
+    checkpoints/performance_baseline/steady_bs2048_gpu_w30_m30_20260921/gpu_bf16_performance.json \
+    checkpoints/performance_baseline/steady_bs2048_npu_w30_m30_20260921/npu_bf16_performance.json
