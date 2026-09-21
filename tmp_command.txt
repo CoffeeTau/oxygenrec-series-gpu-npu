@@ -21,3 +21,11 @@ NPU：
   V2_FULL_TRAIN_MAX_SAMPLES=50000 \
   V2_FULL_TRAIN_EPOCHS=1 \
   bash run_v2_full_training.sh npu bf16
+
+NPU_DEVICE=npu:0 \
+  V2_PERF_OUTPUT_ROOT=checkpoints/performance_baseline/recheck_npu_20260921 \
+  V2_PERF_BATCH_SIZES="64" \
+  V2_PERF_WARMUP_STEPS=100 \
+  V2_PERF_MEASURED_STEPS=300 \
+  V2_PERF_REPEATS=3 \
+  bash run_v2_performance_baseline.sh npu bf16
