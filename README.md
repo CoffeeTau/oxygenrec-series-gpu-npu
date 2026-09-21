@@ -72,6 +72,9 @@ is documented in [the training protocol](docs/training_protocol.md).
 [复现实验日志](实验记录/复现实验日志.md)。
 GPU→NPU的分阶段门槛见[NPU迁移计划](docs/npu_migration_plan.md)。
 GPU与NPU服务器环境分别见[环境快照索引](docs/server_environment.md)。
+后续需要在服务器执行的可复制命令统一见
+[服务器执行命令索引](docs/server_commands/README.md)，不要再从早期的
+`tmp_command.txt` 或聊天记录复制。
 服务器直接下载并接入Qwen的逐步操作见
 [Qwen服务器接入操作指南](Qwen服务器接入操作指南.md)。
 
