@@ -77,3 +77,34 @@ python scripts/compare_v2_performance_baselines.py \
     --allow-commit-mismatch \
     checkpoints/performance_baseline/steady_sweep_gpu_20260921/gpu_bf16_performance.json \
     checkpoints/performance_baseline/steady_sweep_npu_20260921/npu_bf16_performance.json
+
+batch 512
+
+GPU：
+
+  CUDA_VISIBLE_DEVICES=0 \
+  CUDA_DEVICE=cuda:0 \
+  V2_PERF_OUTPUT_ROOT=checkpoints/performance_baseline/steady_bs512_gpu_20260921 \
+  V2_PERF_MAX_SAMPLES=110000 \
+  V2_PERF_BATCH_SIZES="512" \
+  V2_PERF_WARMUP_STEPS=100 \
+  V2_PERF_MEASURED_STEPS=100 \
+  V2_PERF_REPEATS=3 \
+  bash run_v2_performance_baseline.sh gpu bf16
+
+NPU：
+
+  NPU_DEVICE=npu:0 \
+  V2_PERF_OUTPUT_ROOT=checkpoints/performance_baseline/steady_bs512_npu_20260921 \
+  V2_PERF_MAX_SAMPLES=110000 \
+  V2_PERF_BATCH_SIZES="512" \
+  V2_PERF_WARMUP_STEPS=100 \
+  V2_PERF_MEASURED_STEPS=100 \
+  V2_PERF_REPEATS=3 \
+  bash run_v2_performance_baseline.sh npu bf16
+
+比较：
+
+  python scripts/compare_v2_performance_baselines.py \
+    checkpoints/performance_baseline/steady_bs512_gpu_20260921/gpu_bf16_performance.json \
+    checkpoints/performance_baseline/steady_bs512_npu_20260921/npu_bf16_performance.json
