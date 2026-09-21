@@ -45,6 +45,42 @@ class CompareV2PerformanceBaselinesTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "workload"):
             module.compare(payload("gpu", 2000.0), npu)
 
+    def test_rejects_different_commits_by_default(self) -> None:
+        npu = payload("npu", 1500.0)
+        npu["source"]["commit"] = "npu-commit"
+        with self.assertRaisesRegex(ValueError, "source commits differ"):
+            module.compare(payload("gpu", 2000.0), npu)
+
+    def test_allows_clean_commit_mismatch_when_source_hashes_match(self) -> None:
+        gpu = payload("gpu", 2000.0)
+        npu = payload("npu", 1500.0)
+        gpu["source"].update({"tracked_dirty": False, "untracked_file_count": 0})
+        npu["source"].update({
+            "commit": "npu-commit",
+            "tracked_dirty": False,
+            "untracked_file_count": 0,
+        })
+
+        result = module.compare(gpu, npu, allow_commit_mismatch=True)
+
+        self.assertFalse(result["source"]["commits_match"])
+        self.assertEqual(result["source"]["gpu_commit"], "same")
+        self.assertEqual(result["source"]["npu_commit"], "npu-commit")
+        self.assertTrue(result["source"]["source_files_sha256_match"])
+
+    def test_commit_mismatch_override_rejects_dirty_worktree(self) -> None:
+        gpu = payload("gpu", 2000.0)
+        npu = payload("npu", 1500.0)
+        gpu["source"].update({"tracked_dirty": False, "untracked_file_count": 0})
+        npu["source"].update({
+            "commit": "npu-commit",
+            "tracked_dirty": True,
+            "untracked_file_count": 0,
+        })
+
+        with self.assertRaisesRegex(ValueError, "worktree was not clean"):
+            module.compare(gpu, npu, allow_commit_mismatch=True)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -42,3 +42,8 @@ NPU_DEVICE=npu:0 \
 python scripts/compare_v2_performance_baselines.py \
     checkpoints/performance_baseline/recheck_gpu_20260921/gpu_bf16_performance.json \
     checkpoints/performance_baseline/recheck_npu_20260921/npu_bf16_performance.json
+
+python scripts/compare_v2_performance_baselines.py \
+    --allow-commit-mismatch \
+    checkpoints/performance_baseline/recheck_gpu_20260921/gpu_bf16_performance.json \
+    checkpoints/performance_baseline/recheck_npu_20260921/npu_bf16_performance.json

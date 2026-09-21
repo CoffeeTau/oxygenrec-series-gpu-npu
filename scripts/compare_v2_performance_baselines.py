@@ -12,17 +12,38 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("gpu", type=Path)
     parser.add_argument("npu", type=Path)
+    parser.add_argument(
+        "--allow-commit-mismatch",
+        action="store_true",
+        help=(
+            "allow different source commits only when the compared source-file "
+            "hashes match and both worktrees were clean"
+        ),
+    )
     return parser.parse_args()
 
 
-def compare(gpu: dict, npu: dict) -> dict:
+def compare(gpu: dict, npu: dict, *, allow_commit_mismatch: bool = False) -> dict:
     if gpu["platform"] != "gpu" or npu["platform"] != "npu":
         raise ValueError("expected GPU baseline first and NPU baseline second")
     for key in ("protocol", "precision", "inputs", "workload", "source_files_sha256"):
         if gpu[key] != npu[key]:
             raise ValueError(f"GPU/NPU baselines differ in {key}")
-    if gpu["source"]["commit"] != npu["source"]["commit"]:
-        raise ValueError("GPU/NPU source commits differ")
+    gpu_commit = gpu["source"]["commit"]
+    npu_commit = npu["source"]["commit"]
+    commits_match = gpu_commit == npu_commit
+    if not commits_match and not allow_commit_mismatch:
+        raise ValueError(
+            "GPU/NPU source commits differ; rerun on the same commit or pass "
+            "--allow-commit-mismatch after verifying the recorded source-file hashes"
+        )
+    if not commits_match:
+        for label, baseline in (("GPU", gpu), ("NPU", npu)):
+            source = baseline["source"]
+            if source.get("tracked_dirty") or source.get("untracked_file_count", 0):
+                raise ValueError(
+                    f"{label} worktree was not clean; refusing commit-mismatch comparison"
+                )
     gpu_by_batch = {row["batch_size"]: row for row in gpu["aggregates"]}
     npu_by_batch = {row["batch_size"]: row for row in npu["aggregates"]}
     if gpu_by_batch.keys() != npu_by_batch.keys():
@@ -55,6 +76,12 @@ def compare(gpu: dict, npu: dict) -> dict:
         "precision": gpu["precision"],
         "gpu_device_name": gpu["device_name"],
         "npu_device_name": npu["device_name"],
+        "source": {
+            "commits_match": commits_match,
+            "gpu_commit": gpu_commit,
+            "npu_commit": npu_commit,
+            "source_files_sha256_match": True,
+        },
         "scope": "hardware_and_software_stack_observation_not_equivalent_hardware_claim",
         "rows": rows,
     }
@@ -65,6 +92,7 @@ def main() -> int:
     result = compare(
         json.loads(args.gpu.read_text(encoding="utf-8")),
         json.loads(args.npu.read_text(encoding="utf-8")),
+        allow_commit_mismatch=args.allow_commit_mismatch,
     )
     print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
     return 0
