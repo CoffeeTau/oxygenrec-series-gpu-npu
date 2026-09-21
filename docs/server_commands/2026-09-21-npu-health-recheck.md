@@ -1,8 +1,9 @@
 # 2026-09-21 NPU 健康状态复核
 
-状态：**待执行**
+状态：**可选；不阻塞性能主线**
 
-目的：在正式 Profile 前获取 NPU 0 的告警详情，并检查显示为 `Critical` 的 NPU 6。
+目的：仅在 NPU 0 报错、吞吐明显漂移或 Profile 结果异常时，获取 NPU 0 的告警详情，并检查
+显示为 `Critical` 的 NPU 6。正常情况下不执行本专项检查，直接推进短窗口 Profile。
 本轮是只读检查，不重置设备、不结束进程、不安装或升级软件。
 
 华为 `npu-smi` 文档将 `Warning` 定义为一般告警、`Critical` 定义为紧急告警；详细健康查询
@@ -48,4 +49,3 @@ npu-smi info -t usages -i 6 | tee "$RESULT_DIR/npu6_usages.txt"
 
 - [查询所有芯片健康状态](https://www.hiascend.com/document/detail/zh/Atlas%20200I%20A2/24.1.0/re/npu/npusmi_027.html)
 - [查询指定芯片健康状态](https://www.hiascend.com/document/detail/zh/Atlas%20200I%20A2/250RC1/re/npu/npusmi_028.html)
-

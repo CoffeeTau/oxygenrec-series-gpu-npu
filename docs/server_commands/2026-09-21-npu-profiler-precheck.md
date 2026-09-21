@@ -40,4 +40,5 @@ npu-smi info
 结果记录：
 
 - [NPU Profiler API 与设备状态预检查](../../实验记录/案例原始记录/performance_tuning/2026-09-21-npu-profiler-precheck.md)
-- Profiler API 可用；设备健康概览存在 `Warning/Critical`，因此先执行健康状态复核，暂不直接采集 Profile。
+- Profiler API 可用；设备健康概览存在 `Warning/Critical`。后续流程已纠正为直接采集NPU 0短窗口
+  Profile，仅在NPU 0报错、吞吐漂移或采集异常时执行专项健康复核。

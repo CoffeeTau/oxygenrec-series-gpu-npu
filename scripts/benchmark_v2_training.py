@@ -53,6 +53,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--measured-steps", type=int, default=100)
     parser.add_argument("--repeats", type=int, default=3)
     parser.add_argument(
+        "--npu-profile-dir",
+        type=Path,
+        help="collect a short Ascend PyTorch Profiler trace instead of a formal baseline",
+    )
+    parser.add_argument("--profile-warmup-steps", type=int, default=1)
+    parser.add_argument("--profile-active-steps", type=int, default=3)
+    parser.add_argument(
         "--cycle-samples",
         action="store_true",
         help=(
@@ -107,6 +114,20 @@ def main() -> int:
         raise ValueError("max-train-samples must be positive and warmup-steps nonnegative")
     if args.measured_steps < 1 or args.repeats < 1:
         raise ValueError("measured-steps and repeats must be positive")
+    if args.profile_warmup_steps < 0 or args.profile_active_steps < 1:
+        raise ValueError("profile warmup must be nonnegative and active steps must be positive")
+    if args.npu_profile_dir is not None:
+        if args.platform != "npu":
+            raise ValueError("--npu-profile-dir requires --platform npu")
+        if len(args.batch_sizes) != 1 or args.repeats != 1:
+            raise ValueError("NPU profiling requires exactly one batch size and one repeat")
+        profile_steps = args.profile_warmup_steps + args.profile_active_steps
+        if args.measured_steps != profile_steps:
+            raise ValueError(
+                "measured-steps must equal profile-warmup-steps + profile-active-steps"
+            )
+        if args.npu_profile_dir.exists():
+            raise FileExistsError(args.npu_profile_dir)
     for path in (args.events, args.checkpoint, args.sid_registry):
         if not path.is_file():
             raise FileNotFoundError(path)
@@ -222,8 +243,34 @@ def main() -> int:
             synchronize(device)
             losses = []
             started = time.perf_counter()
-            for measured_step in range(args.measured_steps):
-                losses.append(step(args.warmup_steps + measured_step))
+            if args.npu_profile_dir is None:
+                for measured_step in range(args.measured_steps):
+                    losses.append(step(args.warmup_steps + measured_step))
+            else:
+                import torch_npu.profiler as npu_profiler
+
+                with npu_profiler.profile(
+                    activities=[
+                        npu_profiler.ProfilerActivity.CPU,
+                        npu_profiler.ProfilerActivity.NPU,
+                    ],
+                    schedule=npu_profiler.schedule(
+                        wait=0,
+                        warmup=args.profile_warmup_steps,
+                        active=args.profile_active_steps,
+                        repeat=1,
+                    ),
+                    on_trace_ready=npu_profiler.tensorboard_trace_handler(
+                        str(args.npu_profile_dir)
+                    ),
+                    record_shapes=True,
+                    profile_memory=True,
+                    with_stack=False,
+                    with_modules=True,
+                ) as profiler:
+                    for measured_step in range(args.measured_steps):
+                        losses.append(step(args.warmup_steps + measured_step))
+                        profiler.step()
             synchronize(device)
             elapsed = time.perf_counter() - started
             memory = max_memory_allocated(device)
@@ -251,10 +298,19 @@ def main() -> int:
                 flush=True,
             )
 
+    profiling = args.npu_profile_dir is not None
     payload = {
         "schema_version": 1,
-        "protocol": "oxygenrec_v2_single_device_training_performance_v1",
-        "scope": "steady_state_training_baseline_not_quality_training",
+        "protocol": (
+            "oxygenrec_v2_single_device_training_profile_v1"
+            if profiling
+            else "oxygenrec_v2_single_device_training_performance_v1"
+        ),
+        "scope": (
+            "operator_profile_not_throughput_baseline_or_quality_training"
+            if profiling
+            else "steady_state_training_baseline_not_quality_training"
+        ),
         "platform": args.platform,
         "device": str(device),
         "device_name": device_name(device),
@@ -302,6 +358,21 @@ def main() -> int:
             "configured_dropout": config.dropout,
             "behavior_counts": dict(sorted(behavior_counts.items())),
         },
+        "profiling": ({
+            "trace_dir": str(args.npu_profile_dir),
+            "schedule": {
+                "wait": 0,
+                "warmup": args.profile_warmup_steps,
+                "active": args.profile_active_steps,
+                "repeat": 1,
+            },
+            "activities": ["CPU", "NPU"],
+            "record_shapes": True,
+            "profile_memory": True,
+            "with_stack": False,
+            "with_modules": True,
+            "timing_includes_profiler_overhead": True,
+        } if profiling else None),
         "data_build_seconds_once": build_seconds,
         "runs": runs,
         "aggregates": aggregate_runs(runs),
@@ -312,7 +383,8 @@ def main() -> int:
         json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
-    print(f"OK performance_baseline output={args.output}", flush=True)
+    stage = "training_profile" if profiling else "performance_baseline"
+    print(f"OK {stage} output={args.output}", flush=True)
     return 0
 
 
