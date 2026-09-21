@@ -1,6 +1,6 @@
 # 2026-09-21 NPU Profiler API 预检查
 
-状态：**待执行**
+状态：**已完成**
 
 目的：确认当前 NPU Python 环境已经提供 Ascend PyTorch Profiler API，并采集设备状态。
 本轮只做只读检查，不安装软件、不修改模型，也不开始正式 Profile。
@@ -36,3 +36,8 @@ npu-smi info
 执行到这里后暂停，不要自行安装或升级 `torch`、`torch_npu`、CANN 或 MindStudio。
 请回传两条 Python 命令和 `npu-smi info` 的完整服务器运行结果。确认 API 形态后，下一份
 命令文档将给出 batch 4096 的短窗口 Profile 采集命令。
+
+结果记录：
+
+- [NPU Profiler API 与设备状态预检查](../../实验记录/案例原始记录/performance_tuning/2026-09-21-npu-profiler-precheck.md)
+- Profiler API 可用；设备健康概览存在 `Warning/Critical`，因此先执行健康状态复核，暂不直接采集 Profile。
