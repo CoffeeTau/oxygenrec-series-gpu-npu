@@ -308,7 +308,9 @@ python scripts/compare_v2_performance_baselines.py \
 
 基准会校验commit、源码、输入哈希和完整工作负载，报告各batch的吞吐中位数、step时延、
 重复运行变异系数及峰值allocated显存。不同硬件及软件栈的比值是工程观察，不解释为
-同规格硬件结论。结果按以下顺序决策：
+同规格硬件结论。大batch需要的预热加测量样本超过训练划分时，可设置
+`V2_PERF_CYCLE_SAMPLES=1`；脚本会在计时区外重复固定的随机样本顺序，仅用于性能测试，
+不能作为质量训练结果。结果按以下顺序决策：
 
 1. 吞吐随batch明显增长：当前主要是小模型/小batch下的利用率或下发开销，先扩大batch；
 2. 吞吐很早变平且NPU明显落后：在该batch上采集少量稳态step的Ascend PyTorch Profiler；

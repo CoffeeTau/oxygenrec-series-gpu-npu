@@ -52,6 +52,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--warmup-steps", type=int, default=20)
     parser.add_argument("--measured-steps", type=int, default=100)
     parser.add_argument("--repeats", type=int, default=3)
+    parser.add_argument(
+        "--cycle-samples",
+        action="store_true",
+        help=(
+            "repeat the shuffled training order outside the timed loop when the "
+            "requested warmup and measured steps exceed the available split"
+        ),
+    )
     parser.add_argument("--learning-rate", type=float)
     return parser.parse_args()
 
@@ -151,14 +159,25 @@ def main() -> int:
     train_samples = [row for row in rows if row.split is Split.TRAIN]
     build_seconds = time.perf_counter() - build_started
     required = max(args.batch_sizes) * (args.warmup_steps + args.measured_steps)
-    if len(train_samples) < required:
+    if len(train_samples) < max(args.batch_sizes):
+        raise ValueError(
+            f"need at least {max(args.batch_sizes)} train samples for one largest batch; "
+            f"found {len(train_samples)}"
+        )
+    if len(train_samples) < required and not args.cycle_samples:
         raise ValueError(
             f"need at least {required} train samples for the requested largest batch; "
-            f"found {len(train_samples)}"
+            f"found {len(train_samples)}; pass --cycle-samples for a performance-only "
+            "run that repeats the shuffled sample order"
         )
     behavior_counts = Counter(row.target_behavior.value for row in train_samples)
     order = list(range(len(train_samples)))
     random.Random(seed + epoch).shuffle(order)
+    if args.cycle_samples and len(order) < required:
+        repetitions = math.ceil(required / len(order))
+        benchmark_order = (order * repetitions)[:required]
+    else:
+        benchmark_order = order
 
     runs = []
     for batch_size in args.batch_sizes:
@@ -177,7 +196,7 @@ def main() -> int:
                 start = step_index * batch_size
                 selected = [
                     train_samples[index]
-                    for index in order[start:start + batch_size]
+                    for index in benchmark_order[start:start + batch_size]
                 ]
                 batch = make_full_batch(selected, registry, config, device)
                 optimizer.zero_grad(set_to_none=True)
@@ -273,6 +292,8 @@ def main() -> int:
             "warmup_steps": args.warmup_steps,
             "measured_steps": args.measured_steps,
             "repeats": args.repeats,
+            "cycle_samples": args.cycle_samples,
+            "benchmark_order_samples": len(benchmark_order),
             "learning_rate": learning_rate,
             "optimizer": "AdamW",
             "optimizer_state_loaded": bool(checkpoint.get("optimizer_state")),
