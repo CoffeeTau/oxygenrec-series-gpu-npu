@@ -38,3 +38,7 @@ NPU_DEVICE=npu:0 \
   V2_PERF_MEASURED_STEPS=300 \
   V2_PERF_REPEATS=3 \
   bash run_v2_performance_baseline.sh gpu bf16
+
+python scripts/compare_v2_performance_baselines.py \
+    checkpoints/performance_baseline/recheck_gpu_20260921/gpu_bf16_performance.json \
+    checkpoints/performance_baseline/recheck_npu_20260921/npu_bf16_performance.json
