@@ -28,4 +28,13 @@ NPU_DEVICE=npu:0 \
   V2_PERF_WARMUP_STEPS=100 \
   V2_PERF_MEASURED_STEPS=300 \
   V2_PERF_REPEATS=3 \
-  bash run_v2_performance_baseline.sh npu bf16
+  bash run_v2_performance_baseline.sh npu bf16‘
+
+ CUDA_VISIBLE_DEVICES=0 \
+  CUDA_DEVICE=cuda:0 \
+  V2_PERF_OUTPUT_ROOT=checkpoints/performance_baseline/recheck_gpu_20260921 \
+  V2_PERF_BATCH_SIZES="64" \
+  V2_PERF_WARMUP_STEPS=100 \
+  V2_PERF_MEASURED_STEPS=300 \
+  V2_PERF_REPEATS=3 \
+  bash run_v2_performance_baseline.sh gpu bf16
