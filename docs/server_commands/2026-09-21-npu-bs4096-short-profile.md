@@ -1,6 +1,6 @@
 # 2026-09-21 NPU batch 4096 短窗口 Profile
 
-状态：**待执行**
+状态：**已完成**
 
 目的：在已经完成的稳态性能摸底基础上，采集 batch 4096 的3个 active训练step，定位主机下发、
 同步等待、Memcpy、TransData、CPU fallback及主要训练算子耗时。本轮不是吞吐基准，也不训练
@@ -52,13 +52,17 @@ find "$PROFILE_ROOT" -type f | sort | tee "$PROFILE_ROOT/file_manifest.txt"
 OK training_profile output=checkpoints/performance_profiling/npu_bs4096_short_20260921/npu_bf16_profile_summary.json
 ```
 
-执行后暂停，把以下内容作为本轮原始证据提供：
+执行后暂停，优先提供以下最小结果集合：
 
 1. `terminal.log`；
 2. `npu_bf16_profile_summary.json`；
 3. `file_manifest.txt`；
-4. trace目录中名称包含 `operator`、`kernel`、`trace_view` 的文件；
-5. 运行前后的两个 `npu_smi` 文件。
+4. trace目录中的 `operator_details*.csv`；
+5. trace目录中的 `kernel_details*.csv`。
+
+`trace_view*.json`、完整trace目录以及运行前后的两个`npu_smi`文件先保留在服务器，不需要首轮
+回传。只有CSV缺失、时间关联不清楚或发现异常等待时，再进一步读取这些大文件。如果运行失败，
+只需先提供完整`terminal.log`和当时已经生成的`file_manifest.txt`。
 
 不要先手工筛选“看起来慢”的算子，也不要删除没有性能提升的原始输出。下一步直接根据
 operator/kernel统计选择第一个收益最大的A/B优化点。
@@ -67,4 +71,3 @@ operator/kernel统计选择第一个收益最大的A/B优化点。
 
 - [torch_npu.profiler.profile](https://www.hiascend.com/document/detail/en/Pytorch/2610/apiref/customapi/docs/en/custom_APIs/torch_npu-profiler/torch_npu-profiler-profile.md)
 - [torch_npu.profiler.schedule](https://www.hiascend.com/document/detail/en/Pytorch/2610/apiref/customapi/docs/en/custom_APIs/torch_npu-profiler/torch_npu-profiler-schedule.md)
-

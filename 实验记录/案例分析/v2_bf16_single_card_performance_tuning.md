@@ -4,6 +4,7 @@
 
 - [batch 64→4096 服务器结果摘录](../案例原始记录/performance_tuning/2026-09-21-v2-bf16-batch-sweep.md)
 - [NPU Profiler API 与设备状态预检查](../案例原始记录/performance_tuning/2026-09-21-npu-profiler-precheck.md)
+- [NPU batch 4096短窗口Profile](../案例原始记录/performance_tuning/2026-09-21-npu-bs4096-profile.md)
 - 服务器原始 JSON 仍保存在 `checkpoints/performance_baseline/` 对应实验目录。
 
 ## 2. 判断演变与试错价值
@@ -62,3 +63,17 @@ Profiler API 已具备，但 `npu-smi` 显示所有设备均非 `OK`，设备6�
 6. 吞吐、step 时延、CV、allocated memory 以及失败/中断信息；
 7. 本轮发现、判断、采取的处理、结论边界和下一步；
 8. 若废弃某个结果，保留结果并明确废弃原因，不删除失败记录。
+
+## 5. 首轮Profile判断
+
+batch 4096短窗口Profile已成功生成operator、kernel、step trace和timeline产物，训练loss有限，
+代码与输入指纹完整。摘要中的`684.56 samples/s`和约`5.98 s/step`包含Profiler采集、同步和解析
+开销，不能与无Profiler基线`36859.30 samples/s`比较，也不代表性能发生回退。
+
+当前可见warning给出两个候选方向：`masked_fill_`未创建内部格式，可能伴随base-format或TransData
+开销；每步`float(output.loss.detach())`可能对应`_local_scalar_dense`同步。但现阶段只有warning和
+文件清单，没有operator/kernel累计时间，尚不能选择优化代码。Level1/2缺失只影响AiCore细粒度
+metrics，不妨碍先用现有CSV确定第一层热点，因此不重跑Profiler。
+
+下一步直接在服务器解析既有`operator_details.csv`和`kernel_details.csv`，按设备自耗时、调用次数
+和关键词累计占比选择第一个A/B优化点。
