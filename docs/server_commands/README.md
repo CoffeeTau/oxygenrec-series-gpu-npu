@@ -18,7 +18,7 @@ Markdown 文档，避免从聊天记录或旧的临时文本中复制命令。
 
 ## 当前命令
 
-- [2026-09-21：NPU Profile CSV 热点汇总（待执行，不重跑Profile）](2026-09-21-npu-profile-csv-summary.md)
+- [2026-09-23：NPU Profile重新生成并汇总热点（待执行）](2026-09-23-npu-profile-regenerate-and-summary.md)
 
 ## 可选诊断
 
@@ -28,5 +28,9 @@ Markdown 文档，避免从聊天记录或旧的临时文本中复制命令。
 
 - [2026-09-21：NPU batch 4096 短窗口 Profile（已完成）](2026-09-21-npu-bs4096-short-profile.md)
 - [2026-09-21：NPU Profiler API 预检查（已完成）](2026-09-21-npu-profiler-precheck.md)
+
+## 已替代命令
+
+- [2026-09-21：只汇总已有Profile CSV（原始CSV已删除）](2026-09-21-npu-profile-csv-summary.md)
 
 `tmp_command.txt` 保留为早期实验记录，不再作为后续服务器命令入口。

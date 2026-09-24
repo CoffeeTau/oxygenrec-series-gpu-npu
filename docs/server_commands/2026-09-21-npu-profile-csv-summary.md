@@ -1,6 +1,6 @@
 # 2026-09-21 NPU Profile CSV 热点汇总
 
-状态：**待执行**
+状态：**已被2026-09-23重新采集与汇总命令替代**
 
 目的：直接解析已经生成的 `operator_details.csv` 和 `kernel_details.csv`，输出可回传的小型热点
 摘要。本步骤不重跑训练、不重跑Profiler。
@@ -32,3 +32,5 @@ python scripts/summarize_v2_npu_profile.py \
 
 若脚本报“找不到列”，请只提供报错和两个CSV的第一行表头，不需要重跑Profiler。
 
+由于本轮原始CSV已被误删，实际执行请改用
+[2026-09-23 NPU Profile重新生成并汇总热点](2026-09-23-npu-profile-regenerate-and-summary.md)。
