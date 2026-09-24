@@ -5,6 +5,7 @@
 - [batch 64→4096 服务器结果摘录](../案例原始记录/performance_tuning/2026-09-21-v2-bf16-batch-sweep.md)
 - [NPU Profiler API 与设备状态预检查](../案例原始记录/performance_tuning/2026-09-21-npu-profiler-precheck.md)
 - [NPU batch 4096短窗口Profile](../案例原始记录/performance_tuning/2026-09-21-npu-bs4096-profile.md)
+- [NPU batch 4096 Profile热点结果](../案例原始记录/performance_tuning/2026-09-23-npu-bs4096-profile-hotspots.md)
 - 服务器原始 JSON 仍保存在 `checkpoints/performance_baseline/` 对应实验目录。
 
 ## 2. 判断演变与试错价值
@@ -70,10 +71,25 @@ batch 4096短窗口Profile已成功生成operator、kernel、step trace和timeli
 代码与输入指纹完整。摘要中的`684.56 samples/s`和约`5.98 s/step`包含Profiler采集、同步和解析
 开销，不能与无Profiler基线`36859.30 samples/s`比较，也不代表性能发生回退。
 
-当前可见warning给出两个候选方向：`masked_fill_`未创建内部格式，可能伴随base-format或TransData
-开销；每步`float(output.loss.detach())`可能对应`_local_scalar_dense`同步。但现阶段只有warning和
-文件清单，没有operator/kernel累计时间，尚不能选择优化代码。Level1/2缺失只影响AiCore细粒度
-metrics，不妨碍先用现有CSV确定第一层热点，因此不重跑Profiler。
+E141的原始CSV误删后，E143按相同协议重新采集成功。真实Top operator显示`aclnnDropoutV3`
+占24.13%、`aclnnInplaceCopy`占15.93%，FlashAttention反向/正向分别占7.44%/4.99%。kernel层面，
+dropout族合计约26.05%，copy/layout族约15.77%，FlashAttention正反向及transpose约12.53%。
 
-下一步直接在服务器解析既有`operator_details.csv`和`kernel_details.csv`，按设备自耗时、调用次数
-和关键词累计占比选择第一个A/B优化点。
+此外，operator关键词汇总出现534次`_local_scalar_dense`，即3个active step约178次/step。它的
+Device Self Duration为0，因此不能把534次直接换算成总耗时；但结合原生AdamW的状态更新和大量
+InplaceCopy/InplaceAdd，它是高优先级host-bound候选。
+
+## 6. 第一项优化决策
+
+不从关闭dropout开始：尽管dropout是最大设备热点，关闭它会改变训练正则化语义，使结果不再是
+同一workload的公平性能比较。也不单独开启AdamW `capturable`：当前没有图捕获，PyTorch文档明确
+提示该选项可能损害未捕获执行的性能。
+
+首个A/B只把`torch.optim.AdamW`替换为`torch_npu.optim.NpuFusedAdamW`。昇腾的模型优化材料把
+融合AdamW列为直接替换项，且TorchNPU 2.7.1分支存在对应接口与测试。该实验保持checkpoint、
+模型、dropout、batch、样本顺序、BF16和测量窗口一致，目标是同时减少优化器标量状态、原地更新
+和copy开销。
+
+决策门槛为：loss有限、首步loss基本一致、两组CV优先低于5%，且融合版本吞吐至少提高5%。若
+收益不足或实现不兼容，完整保留负结果，下一轮转向padding mask与layout copy；不重复当前Profile，
+也不围绕Level1/2或memory warning继续做细枝末节验证。

@@ -68,6 +68,12 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument("--learning-rate", type=float)
+    parser.add_argument(
+        "--optimizer",
+        choices=("adamw", "npu_fused_adamw"),
+        default="adamw",
+        help="optimizer implementation; the fused variant is NPU-only",
+    )
     return parser.parse_args()
 
 
@@ -104,6 +110,16 @@ def aggregate_runs(runs: list[dict[str, float | int]]) -> list[dict[str, float |
     return aggregates
 
 
+def build_optimizer(name: str, parameters, learning_rate: float):
+    if name == "adamw":
+        return torch.optim.AdamW(parameters, lr=learning_rate), "AdamW"
+    if name == "npu_fused_adamw":
+        from torch_npu.optim import NpuFusedAdamW
+
+        return NpuFusedAdamW(parameters, lr=learning_rate), "NpuFusedAdamW"
+    raise ValueError(f"unsupported optimizer: {name}")
+
+
 def main() -> int:
     args = parse_args()
     if args.output.exists():
@@ -116,6 +132,8 @@ def main() -> int:
         raise ValueError("measured-steps and repeats must be positive")
     if args.profile_warmup_steps < 0 or args.profile_active_steps < 1:
         raise ValueError("profile warmup must be nonnegative and active steps must be positive")
+    if args.optimizer == "npu_fused_adamw" and args.platform != "npu":
+        raise ValueError("npu_fused_adamw requires --platform npu")
     if args.npu_profile_dir is not None:
         if args.platform != "npu":
             raise ValueError("--npu-profile-dir requires --platform npu")
@@ -201,11 +219,16 @@ def main() -> int:
         benchmark_order = order
 
     runs = []
+    optimizer_name = None
     for batch_size in args.batch_sizes:
         for repeat in range(1, args.repeats + 1):
             seed_torch(seed, device)
             model = load_model(checkpoint, config, device)
-            optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
+            optimizer, optimizer_name = build_optimizer(
+                args.optimizer,
+                model.parameters(),
+                learning_rate,
+            )
             optimizer_loaded = bool(checkpoint.get("optimizer_state"))
             if optimizer_loaded:
                 optimizer.load_state_dict(checkpoint["optimizer_state"])
@@ -351,7 +374,7 @@ def main() -> int:
             "cycle_samples": args.cycle_samples,
             "benchmark_order_samples": len(benchmark_order),
             "learning_rate": learning_rate,
-            "optimizer": "AdamW",
+            "optimizer": optimizer_name,
             "optimizer_state_loaded": bool(checkpoint.get("optimizer_state")),
             "loss_host_read_interval_steps": 1,
             "model_mode": "train",

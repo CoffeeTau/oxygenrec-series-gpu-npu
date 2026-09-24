@@ -18,7 +18,7 @@ Markdown 文档，避免从聊天记录或旧的临时文本中复制命令。
 
 ## 当前命令
 
-- [2026-09-23：NPU Profile重新生成并汇总热点（待执行）](2026-09-23-npu-profile-regenerate-and-summary.md)
+- [2026-09-24：NPU原生AdamW与融合AdamW受控A/B（待执行）](2026-09-24-npu-fused-adamw-ab.md)
 
 ## 可选诊断
 
@@ -26,6 +26,7 @@ Markdown 文档，避免从聊天记录或旧的临时文本中复制命令。
 
 ## 已完成命令
 
+- [2026-09-23：NPU Profile重新生成并汇总热点（已完成）](2026-09-23-npu-profile-regenerate-and-summary.md)
 - [2026-09-21：NPU batch 4096 短窗口 Profile（已完成）](2026-09-21-npu-bs4096-short-profile.md)
 - [2026-09-21：NPU Profiler API 预检查（已完成）](2026-09-21-npu-profiler-precheck.md)
 

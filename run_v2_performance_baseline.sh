@@ -25,10 +25,15 @@ warmup_steps="${V2_PERF_WARMUP_STEPS:-20}"
 measured_steps="${V2_PERF_MEASURED_STEPS:-100}"
 repeats="${V2_PERF_REPEATS:-3}"
 cycle_samples="${V2_PERF_CYCLE_SAMPLES:-0}"
+optimizer="${V2_PERF_OPTIMIZER:-adamw}"
 read -r -a batch_sizes <<< "${V2_PERF_BATCH_SIZES:-64 128 256}"
 
 if [[ "$cycle_samples" != "0" && "$cycle_samples" != "1" ]]; then
     echo "V2_PERF_CYCLE_SAMPLES must be 0 or 1" >&2
+    exit 2
+fi
+if [[ "$optimizer" != "adamw" && "$optimizer" != "npu_fused_adamw" ]]; then
+    echo "V2_PERF_OPTIMIZER must be adamw or npu_fused_adamw" >&2
     exit 2
 fi
 
@@ -51,7 +56,8 @@ command=("$python_bin" scripts/benchmark_v2_training.py \
     --batch-sizes "${batch_sizes[@]}" \
     --warmup-steps "$warmup_steps" \
     --measured-steps "$measured_steps" \
-    --repeats "$repeats")
+    --repeats "$repeats" \
+    --optimizer "$optimizer")
 if [[ "$cycle_samples" == "1" ]]; then
     command+=(--cycle-samples)
 fi

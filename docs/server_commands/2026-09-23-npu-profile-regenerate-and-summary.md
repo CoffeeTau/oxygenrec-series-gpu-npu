@@ -1,6 +1,6 @@
 # 2026-09-23 NPU Profile 重新生成并汇总热点
 
-状态：**待执行**
+状态：**已完成（2026-09-23服务器结果）**
 
 目的：重新生成已误删的 `operator_details.csv` 和 `kernel_details.csv`，随后立即解析热点。
 本流程使用新的输出目录，不覆盖、不清理旧实验目录。
@@ -76,3 +76,9 @@ OK profile_summary output=checkpoints/performance_profiling/npu_bs4096_short_reg
 
 原始CSV、trace、运行摘要与前后`npu-smi`继续保留在服务器，不需要首轮全部回传。
 
+## 完成结果
+
+- 新Profile摘要、operator/kernel CSV和Top 30热点汇总均已生成；
+- 结果目录：`checkpoints/performance_profiling/npu_bs4096_short_regenerated_20260923/`；
+- 详细摘录与判断见
+  [`NPU batch 4096 Profile热点`](../../实验记录/案例原始记录/performance_tuning/2026-09-23-npu-bs4096-profile-hotspots.md)。
