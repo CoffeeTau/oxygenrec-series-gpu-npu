@@ -27,6 +27,7 @@ def payload(optimizer: str, throughput: float) -> dict:
             "batch_sizes": [4096],
             "optimizer": optimizer,
             "warmup_steps": 100,
+            "zero_grad_mode": "zero",
         },
         "source_files_sha256": {"model.py": "same"},
         "source": {"commit": "same", "tracked_dirty": False},
@@ -63,6 +64,12 @@ class CompareV2PerformanceABTests(unittest.TestCase):
         treatment["workload"]["warmup_steps"] = 20
         with self.assertRaisesRegex(ValueError, "beyond optimizer"):
             module.compare(payload("AdamW", 20_000.0), treatment)
+
+    def test_rejects_zero_grad_mode_difference(self) -> None:
+        control = payload("AdamW", 20_000.0)
+        control["workload"]["zero_grad_mode"] = "set_to_none"
+        with self.assertRaisesRegex(ValueError, "beyond optimizer"):
+            module.compare(control, payload("NpuFusedAdamW", 25_000.0))
 
     def test_rejects_nonfinite_loss_evidence(self) -> None:
         treatment = payload("NpuFusedAdamW", 25_000.0)

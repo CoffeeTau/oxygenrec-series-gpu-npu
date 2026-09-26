@@ -74,6 +74,12 @@ def parse_args() -> argparse.Namespace:
         default="adamw",
         help="optimizer implementation; the fused variant is NPU-only",
     )
+    parser.add_argument(
+        "--zero-grad-mode",
+        choices=("set_to_none", "zero"),
+        default="set_to_none",
+        help="clear gradients by setting them to None or by zeroing them",
+    )
     return parser.parse_args()
 
 
@@ -134,6 +140,11 @@ def main() -> int:
         raise ValueError("profile warmup must be nonnegative and active steps must be positive")
     if args.optimizer == "npu_fused_adamw" and args.platform != "npu":
         raise ValueError("npu_fused_adamw requires --platform npu")
+    if args.optimizer == "npu_fused_adamw" and args.zero_grad_mode != "zero":
+        raise ValueError(
+            "npu_fused_adamw requires --zero-grad-mode zero because the "
+            "TorchNPU fused optimizer rejects set_to_none=True"
+        )
     if args.npu_profile_dir is not None:
         if args.platform != "npu":
             raise ValueError("--npu-profile-dir requires --platform npu")
@@ -243,7 +254,7 @@ def main() -> int:
                     for index in benchmark_order[start:start + batch_size]
                 ]
                 batch = make_full_batch(selected, registry, config, device)
-                optimizer.zero_grad(set_to_none=True)
+                optimizer.zero_grad(set_to_none=args.zero_grad_mode == "set_to_none")
                 context = (
                     nullcontext() if args.precision == "fp32"
                     else torch.autocast(device_type=device.type, dtype=torch.bfloat16)
@@ -376,6 +387,7 @@ def main() -> int:
             "learning_rate": learning_rate,
             "optimizer": optimizer_name,
             "optimizer_state_loaded": bool(checkpoint.get("optimizer_state")),
+            "zero_grad_mode": args.zero_grad_mode,
             "loss_host_read_interval_steps": 1,
             "model_mode": "train",
             "configured_dropout": config.dropout,

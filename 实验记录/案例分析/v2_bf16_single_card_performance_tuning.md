@@ -93,3 +93,14 @@ InplaceCopy/InplaceAdd，它是高优先级host-bound候选。
 决策门槛为：loss有限、首步loss基本一致、两组CV优先低于5%，且融合版本吞吐至少提高5%。若
 收益不足或实现不兼容，完整保留负结果，下一轮转向padding mask与layout copy；不重复当前Profile，
 也不围绕Level1/2或memory warning继续做细枝末节验证。
+
+## 7. 融合AdamW首轮失败与协议修订
+
+首轮control在server-118取得`27372.037 samples/s`中位吞吐和约`1.22%` CV；用户确认118和119
+机器几乎完全一致，因此该点可与历史数据作环境相近的横向参考。但treatment在第一个warmup step
+执行`zero_grad(set_to_none=True)`时被TorchNPU拒绝，尚未进入前向、反向或正式测量。
+
+这次失败没有否定融合AdamW性能方向，只说明旧benchmark隐含了原生AdamW支持、融合优化器不支持
+的接口前提。若仅把treatment改为`set_to_none=False`，优化器实现和梯度清零策略会同时变化，不能
+归因。因此重试必须让两组统一使用zero模式，并把该模式写入结果JSON。旧control继续作为失败流程
+记录，不进入新一轮数值比较。

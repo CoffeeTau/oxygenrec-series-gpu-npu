@@ -1,6 +1,6 @@
 # 2026-09-24 NPU原生AdamW与融合AdamW受控A/B
 
-状态：**待执行**
+状态：**已执行；control完成，treatment因zero-grad接口不兼容失败**
 
 目的：在相同代码、输入、batch、预热、测量窗口和随机种子下，只替换优化器实现，验证
 `torch_npu.optim.NpuFusedAdamW`能否减少当前Profile暴露的优化器标量读取、原地更新和拷贝开销。
@@ -88,3 +88,15 @@ find "$AB_ROOT" -type f | sort | tee "$AB_ROOT/file_manifest.txt"
 
 如果融合优化器运行失败，只返回完整的
 `$AB_ROOT/treatment_npu_fused_adamw_terminal.log`。其余原始日志留在服务器归档。
+
+## 实际结果
+
+- control三次吞吐为`26819.998 / 27614.505 / 27372.037 samples/s`；
+- 中位吞吐`27372.037 samples/s`，CV约`1.22%`；
+- treatment在首个warmup step执行
+  `optimizer.zero_grad(set_to_none=True)`时失败；
+- TorchNPU明确报错：`set_to_none is not supported in fused optimizers`；
+- treatment JSON未生成，随后比较脚本读取缺失文件的报错属于连锁错误。
+
+本轮目录和control结果继续保留，不覆盖。修复后必须把两组都改为zero模式并重新运行，见
+[`2026-09-25匹配zero-grad重试`](2026-09-25-npu-fused-adamw-ab-retry.md)。

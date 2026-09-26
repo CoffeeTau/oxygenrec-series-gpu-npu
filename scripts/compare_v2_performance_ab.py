@@ -7,6 +7,7 @@ import argparse
 import json
 from pathlib import Path
 import statistics
+import sys
 
 
 def parse_args() -> argparse.Namespace:
@@ -125,6 +126,18 @@ def compare(control: dict, treatment: dict) -> dict:
 
 def main() -> int:
     args = parse_args()
+    missing = [
+        f"{label}={path}"
+        for label, path in (("control", args.control), ("treatment", args.treatment))
+        if not path.is_file()
+    ]
+    if missing:
+        print(
+            "cannot compare because result file is missing; the corresponding "
+            f"experiment likely failed before writing JSON: {', '.join(missing)}",
+            file=sys.stderr,
+        )
+        return 2
     result = compare(
         json.loads(args.control.read_text(encoding="utf-8")),
         json.loads(args.treatment.read_text(encoding="utf-8")),
