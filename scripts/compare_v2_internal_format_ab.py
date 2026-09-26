@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compare two matched single-device v2 performance experiments."""
+"""Compare matched NPU runs with proprietary internal formats disabled/enabled."""
 
 from __future__ import annotations
 
@@ -10,6 +10,9 @@ import statistics
 import sys
 
 
+FACTOR = "npu_internal_format"
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("control", type=Path)
@@ -18,9 +21,9 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _without_optimizer(workload: dict) -> dict:
+def _without_factor(workload: dict) -> dict:
     matched = dict(workload)
-    matched.pop("optimizer", None)
+    matched.pop(FACTOR, None)
     return matched
 
 
@@ -51,6 +54,8 @@ def compare(control: dict, treatment: dict) -> dict:
     ):
         if control[key] != treatment[key]:
             raise ValueError(f"control/treatment differ in {key}")
+    if control["platform"] != "npu":
+        raise ValueError("internal-format A/B requires the NPU platform")
     if control["source"]["commit"] != treatment["source"]["commit"]:
         raise ValueError("control/treatment source commits differ")
     if control["source"].get("tracked_dirty") or treatment["source"].get("tracked_dirty"):
@@ -58,10 +63,12 @@ def compare(control: dict, treatment: dict) -> dict:
 
     control_workload = control["workload"]
     treatment_workload = treatment["workload"]
-    if _without_optimizer(control_workload) != _without_optimizer(treatment_workload):
-        raise ValueError("control/treatment workload differs beyond optimizer")
-    if control_workload.get("optimizer") == treatment_workload.get("optimizer"):
-        raise ValueError("control/treatment optimizer must differ")
+    if _without_factor(control_workload) != _without_factor(treatment_workload):
+        raise ValueError("control/treatment workload differs beyond npu_internal_format")
+    if control_workload.get(FACTOR) != "disable":
+        raise ValueError("control npu_internal_format must be disable")
+    if treatment_workload.get(FACTOR) != "enable":
+        raise ValueError("treatment npu_internal_format must be enable")
 
     control_by_batch = {int(row["batch_size"]): row for row in control["aggregates"]}
     treatment_by_batch = {
@@ -110,17 +117,19 @@ def compare(control: dict, treatment: dict) -> dict:
         })
 
     return {
-        "schema_version": 2,
-        "protocol": "oxygenrec_v2_single_device_performance_ab_v2",
-        "scope": "optimizer_performance_ab_not_quality_training",
+        "schema_version": 1,
+        "protocol": "oxygenrec_v2_npu_internal_format_performance_ab_v1",
+        "scope": "runtime_format_performance_ab_not_quality_training",
         "platform": control["platform"],
         "device_name": control["device_name"],
         "precision": control["precision"],
-        "control_optimizer": control_workload["optimizer"],
-        "treatment_optimizer": treatment_workload["optimizer"],
+        "factor": FACTOR,
+        "control_value": control_workload[FACTOR],
+        "treatment_value": treatment_workload[FACTOR],
+        "optimizer": control_workload["optimizer"],
         "loss_semantics": (
-            "first_loss is the first measured loss after all configured warmup steps, "
-            "not the loss before the first optimizer update"
+            "first_loss is the first measured loss after all configured warmup steps; "
+            "this performance A/B does not establish recommendation quality"
         ),
         "source_commit": control["source"]["commit"],
         "rows": rows,

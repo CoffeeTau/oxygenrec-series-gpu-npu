@@ -80,6 +80,15 @@ def parse_args() -> argparse.Namespace:
         default="set_to_none",
         help="clear gradients by setting them to None or by zeroing them",
     )
+    parser.add_argument(
+        "--npu-internal-format",
+        choices=("default", "disable", "enable"),
+        default="default",
+        help=(
+            "leave the TorchNPU proprietary-format setting unchanged or set it "
+            "explicitly before any benchmark tensor is created"
+        ),
+    )
     return parser.parse_args()
 
 
@@ -126,6 +135,20 @@ def build_optimizer(name: str, parameters, learning_rate: float):
     raise ValueError(f"unsupported optimizer: {name}")
 
 
+def configure_npu_internal_format(platform: str, mode: str) -> None:
+    """Apply the TorchNPU layout option before model and batch tensors exist."""
+    if platform != "npu":
+        if mode != "default":
+            raise ValueError("--npu-internal-format is only valid for --platform npu")
+        return
+    if mode == "default":
+        return
+    import torch_npu
+
+    torch_npu.npu.config.allow_internal_format = mode == "enable"
+    print(f"npu_internal_format={mode}", flush=True)
+
+
 def main() -> int:
     args = parse_args()
     if args.output.exists():
@@ -145,6 +168,8 @@ def main() -> int:
             "npu_fused_adamw requires --zero-grad-mode zero because the "
             "TorchNPU fused optimizer rejects set_to_none=True"
         )
+    if args.platform != "npu" and args.npu_internal_format != "default":
+        raise ValueError("--npu-internal-format is only valid for --platform npu")
     if args.npu_profile_dir is not None:
         if args.platform != "npu":
             raise ValueError("--npu-profile-dir requires --platform npu")
@@ -165,6 +190,7 @@ def main() -> int:
     source = git_state(project_root)
     if source["commit"] is None or source["tracked_dirty"]:
         raise RuntimeError("performance baseline requires a known commit and clean tracked files")
+    configure_npu_internal_format(args.platform, args.npu_internal_format)
     device = resolve_device(args.device)
     expected_type = "cuda" if args.platform == "gpu" else "npu"
     if device.type != expected_type:
@@ -388,6 +414,7 @@ def main() -> int:
             "optimizer": optimizer_name,
             "optimizer_state_loaded": bool(checkpoint.get("optimizer_state")),
             "zero_grad_mode": args.zero_grad_mode,
+            "npu_internal_format": args.npu_internal_format,
             "loss_host_read_interval_steps": 1,
             "model_mode": "train",
             "configured_dropout": config.dropout,

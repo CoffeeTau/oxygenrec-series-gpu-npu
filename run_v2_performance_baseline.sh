@@ -27,6 +27,7 @@ repeats="${V2_PERF_REPEATS:-3}"
 cycle_samples="${V2_PERF_CYCLE_SAMPLES:-0}"
 optimizer="${V2_PERF_OPTIMIZER:-adamw}"
 zero_grad_mode="${V2_PERF_ZERO_GRAD_MODE:-set_to_none}"
+npu_internal_format="${V2_PERF_NPU_INTERNAL_FORMAT:-default}"
 read -r -a batch_sizes <<< "${V2_PERF_BATCH_SIZES:-64 128 256}"
 
 if [[ "$cycle_samples" != "0" && "$cycle_samples" != "1" ]]; then
@@ -39,6 +40,14 @@ if [[ "$optimizer" != "adamw" && "$optimizer" != "npu_fused_adamw" ]]; then
 fi
 if [[ "$zero_grad_mode" != "set_to_none" && "$zero_grad_mode" != "zero" ]]; then
     echo "V2_PERF_ZERO_GRAD_MODE must be set_to_none or zero" >&2
+    exit 2
+fi
+if [[ "$npu_internal_format" != "default" && "$npu_internal_format" != "disable" && "$npu_internal_format" != "enable" ]]; then
+    echo "V2_PERF_NPU_INTERNAL_FORMAT must be default, disable, or enable" >&2
+    exit 2
+fi
+if [[ "$platform" != "npu" && "$npu_internal_format" != "default" ]]; then
+    echo "V2_PERF_NPU_INTERNAL_FORMAT is only valid for the npu platform" >&2
     exit 2
 fi
 
@@ -63,7 +72,8 @@ command=("$python_bin" scripts/benchmark_v2_training.py \
     --measured-steps "$measured_steps" \
     --repeats "$repeats" \
     --optimizer "$optimizer" \
-    --zero-grad-mode "$zero_grad_mode")
+    --zero-grad-mode "$zero_grad_mode" \
+    --npu-internal-format "$npu_internal_format")
 if [[ "$cycle_samples" == "1" ]]; then
     command+=(--cycle-samples)
 fi

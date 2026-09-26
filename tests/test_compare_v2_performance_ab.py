@@ -58,6 +58,12 @@ class CompareV2PerformanceABTests(unittest.TestCase):
             result["rows"][0]["treatment_to_control_throughput_ratio"],
             1.25,
         )
+        self.assertEqual(result["schema_version"], 2)
+        self.assertIn("after all configured warmup steps", result["loss_semantics"])
+        self.assertIn(
+            "first_measured_loss_absolute_difference",
+            result["rows"][0],
+        )
 
     def test_rejects_non_optimizer_workload_difference(self) -> None:
         treatment = payload("NpuFusedAdamW", 25_000.0)

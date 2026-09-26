@@ -90,7 +90,8 @@ InplaceCopy/InplaceAdd，它是高优先级host-bound候选。
 模型、dropout、batch、样本顺序、BF16和测量窗口一致，目标是同时减少优化器标量状态、原地更新
 和copy开销。
 
-决策门槛为：loss有限、首步loss基本一致、两组CV优先低于5%，且融合版本吞吐至少提高5%。若
+决策门槛为：loss有限、两组CV优先低于5%，且融合版本吞吐至少提高5%。`first_loss`是warmup后的
+首个测量loss，不是第一次optimizer更新前的loss，因此只作为数值轨迹诊断，不要求两组一致。若
 收益不足或实现不兼容，完整保留负结果，下一轮转向padding mask与layout copy；不重复当前Profile，
 也不围绕Level1/2或memory warning继续做细枝末节验证。
 
@@ -104,3 +105,26 @@ InplaceCopy/InplaceAdd，它是高优先级host-bound候选。
 的接口前提。若仅把treatment改为`set_to_none=False`，优化器实现和梯度清零策略会同时变化，不能
 归因。因此重试必须让两组统一使用zero模式，并把该模式写入结果JSON。旧control继续作为失败流程
 记录，不进入新一轮数值比较。
+
+## 8. 融合AdamW A/B结论
+
+匹配zero-grad后的实验运行成功：融合版本中位吞吐从`27150.77`提升到`27879.62 samples/s`，
+提高`2.6844%`；中位step时延减少约`3.944 ms`。两组CV均低于1%，且treatment最小吞吐仍高于
+control最大吞吐，因此这个小幅差异在本轮具有一致性，不宜简单归为随机噪声。
+
+但收益低于预设5%工程门槛，显存变化也只有约`-0.071%`。此外，两种优化器经过100步warmup后
+loss轨迹已经分开；这不等于融合实现错误，也不能解释为质量提升，只说明替换并非完全无数值影响。
+综合收益、维护成本和数值边界，本项目不采纳融合AdamW，不进行第二次确认。下一步转向现有Profile
+中的layout/copy热点，并优先复用已有operator CSV的call stack，而不是重新跑同类Profile。
+
+## 9. 第二项优化决策：NPU私有格式
+
+现有Profile已经给出明确的copy/layout占比，而源码中没有主动设置`allow_internal_format=False`。
+TorchNPU官方接口允许在tensor创建前显式控制是否允许私有格式；因此下一轮不再重复采集Profile，
+而是在同一AdamW训练协议中直接比较`disable`与`enable`。这比根据warning猜测某个`masked_fill`源码
+位置更快，也能直接回答该layout开关对端到端吞吐是否有工程价值。
+
+本轮唯一变量是私有格式开关：batch 4096、BF16、AdamW、`set_to_none`、数据顺序、100步warmup、
+100步测量和3次repeat全部匹配。预设性能门槛仍为5%。由于官方说明开启私有格式后某些算子可能
+出现数值路径差异，loss有限只是最低门槛；若性能达到门槛，还必须做第二次性能确认及固定验证集
+数值复核，不能直接改正式训练默认值。
