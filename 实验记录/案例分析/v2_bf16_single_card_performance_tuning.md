@@ -140,3 +140,24 @@ loss完全一致。因此当前证据不支持把`allow_internal_format`作为Ox
 单变量替换。下一轮保持`p=0.1`，只把NPU模型内参数为空的`nn.Dropout`模块替换为官方
 `DropoutWithByteMask`。这保留随机失活的统计语义，但不保证相同seed下逐值相同；因此先以5%吞吐
 门槛筛选，达标后再做固定验证集和训练质量复核。
+
+## 11. ByteMask目标机失败与路线终止
+
+ByteMask treatment没有进入性能测量。`DropoutWithByteMask`最终调用已弃用的
+`dropout_with_byte_mask`，而目标Ascend 950DT运行时只允许ACLNN算子，该旧算子没有ACLNN实现，
+因此在第一个warmup前向直接返回`ERR00007 PTA feature not supported`。这不是batch容量、模型输入
+或NPU健康问题，也不能通过调整warmup/repeat修复。
+
+标准Dropout此前实际执行`aclnnDropoutV3`，是当前受支持的路径。为了避免在已弃用接口上继续消耗
+时间，本项目不尝试强制旧算子、不为候选更换软件栈，也不以关闭dropout换取不可比的吞吐；该路线
+按失败实验归档并终止。
+
+## 12. 第三项优化决策：延后loss主机读取
+
+benchmark当前每步在前向与反向之间执行`float(output.loss.detach())`。对NPU标量进行Python物化会
+建立主机同步点，可能截断前向、反向和相邻step的异步下发。下一轮只比较两种观测策略：control在
+每个计时step内读取一次，treatment保留detach后的设备标量，在最终设备同步和计时结束后统一读取。
+
+最终设备同步仍计入两组时间，所以treatment不会把真实NPU工作挪出测量窗口；两组也都会保存并检查
+全部100个测量loss。该变量不改模型、优化器、dropout、样本顺序或loss数学定义。由于实现和数值
+风险显著低于替换优化器，预设采纳门槛调整为稳定提升至少2%；不达标即停止，不继续搜索不同读取间隔。

@@ -95,6 +95,15 @@ def parse_args() -> argparse.Namespace:
         default="standard",
         help="use standard torch.nn.Dropout or the NPU-only DropoutWithByteMask",
     )
+    parser.add_argument(
+        "--loss-host-read-mode",
+        choices=("per_step", "deferred"),
+        default="per_step",
+        help=(
+            "materialize each loss on the host inside the timed step or defer all "
+            "loss materialization and finite checks until after timed device sync"
+        ),
+    )
     return parser.parse_args()
 
 
@@ -315,7 +324,7 @@ def main() -> int:
                 group["lr"] = learning_rate
             model.train()
 
-            def step(step_index: int) -> float:
+            def step(step_index: int):
                 start = step_index * batch_size
                 selected = [
                     train_samples[index]
@@ -329,25 +338,38 @@ def main() -> int:
                 )
                 with context:
                     output = model(**batch)
-                loss = float(output.loss.detach())
-                if not math.isfinite(loss):
-                    raise RuntimeError(
-                        f"non-finite loss for batch={batch_size} repeat={repeat} step={step_index}"
-                    )
+                detached_loss = output.loss.detach()
+                if args.loss_host_read_mode == "per_step":
+                    loss = float(detached_loss)
+                    if not math.isfinite(loss):
+                        raise RuntimeError(
+                            "non-finite loss for "
+                            f"batch={batch_size} repeat={repeat} step={step_index}"
+                        )
                 output.loss.backward()
                 optimizer.step()
-                return loss
+                return detached_loss
 
+            def materialize_losses(loss_tensors, stage: str) -> list[float]:
+                values = [float(loss) for loss in loss_tensors]
+                if not all(math.isfinite(loss) for loss in values):
+                    raise RuntimeError(
+                        f"non-finite {stage} loss for batch={batch_size} repeat={repeat}"
+                    )
+                return values
+
+            warmup_loss_tensors = []
             for warmup_step in range(args.warmup_steps):
-                step(warmup_step)
+                warmup_loss_tensors.append(step(warmup_step))
             synchronize(device)
+            materialize_losses(warmup_loss_tensors, "warmup")
             reset_peak_memory_stats(device)
             synchronize(device)
-            losses = []
+            loss_tensors = []
             started = time.perf_counter()
             if args.npu_profile_dir is None:
                 for measured_step in range(args.measured_steps):
-                    losses.append(step(args.warmup_steps + measured_step))
+                    loss_tensors.append(step(args.warmup_steps + measured_step))
             else:
                 import torch_npu.profiler as npu_profiler
 
@@ -371,11 +393,12 @@ def main() -> int:
                     with_modules=True,
                 ) as profiler:
                     for measured_step in range(args.measured_steps):
-                        losses.append(step(args.warmup_steps + measured_step))
+                        loss_tensors.append(step(args.warmup_steps + measured_step))
                         profiler.step()
             synchronize(device)
             elapsed = time.perf_counter() - started
             memory = max_memory_allocated(device)
+            losses = materialize_losses(loss_tensors, "measured")
             run = {
                 "batch_size": batch_size,
                 "repeat": repeat,
@@ -461,7 +484,13 @@ def main() -> int:
                 "implementation": args.npu_dropout_implementation,
                 "replaced_modules": dropout_modules_replaced or 0,
             },
-            "loss_host_read_interval_steps": 1,
+            "loss_host_read": {
+                "mode": args.loss_host_read_mode,
+                "timed_materializations_per_step": (
+                    1 if args.loss_host_read_mode == "per_step" else 0
+                ),
+                "post_timing_full_loss_check": True,
+            },
             "model_mode": "train",
             "configured_dropout": config.dropout,
             "behavior_counts": dict(sorted(behavior_counts.items())),

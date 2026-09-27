@@ -1,6 +1,6 @@
 # 2026-09-26 NPU标准Dropout与ByteMask Dropout A/B
 
-状态：**待执行**
+状态：**已执行，treatment因目标机不支持旧ByteMask算子而失败，未采纳**
 
 目的：针对既有Profile中`aclnnDropoutV3`约`24.13%`的最大设备热点，在保持dropout概率`0.1`、
 模型结构和训练数据不变的前提下，比较标准`torch.nn.Dropout`与昇腾NPU专用
@@ -123,3 +123,14 @@ checkpoints/performance_optimization/npu_byte_mask_dropout_20260926/file_manifes
 
 如果某组失败，只回传对应的完整终端日志。
 
+## 2026-09-27 实际结果
+
+- control通过结果文件存在性检查后进入treatment；本次截图没有包含control聚合数值，因此不补写数值；
+- treatment在第一个warmup前向经过`behavior_instruction_adapter`中的Dropout时失败，尚未进入正式测量；
+- `DropoutWithByteMask`调用已弃用的`dropout_with_byte_mask`，运行时明确报告当前设备只支持
+  ACLNN算子，而该旧算子没有ACLNN实现，并返回`ERR00007 PTA feature not supported`；
+- `treatment result missing; stop before comparison`是前述失败导致JSON未生成后的保护性停止，不是第二个故障；
+- 结论：目标Ascend 950DT / TorchNPU 2.7.1.post4栈不支持此实现，不尝试强制开启旧算子，路线停止。
+
+归档记录：
+[`2026-09-27 NPU ByteMask Dropout失败`](../../实验记录/案例原始记录/performance_tuning/2026-09-27-npu-byte-mask-dropout-failure.md)
