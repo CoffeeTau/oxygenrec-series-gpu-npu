@@ -20,7 +20,7 @@ Markdown 文档，避免从聊天记录或旧的临时文本中复制命令。
 
 ## 当前命令
 
-- [2026-09-26：NPU私有格式关闭/开启A/B（待执行）](2026-09-26-npu-internal-format-ab.md)
+- [2026-09-26：NPU标准Dropout与ByteMask Dropout A/B（待执行）](2026-09-26-npu-byte-mask-dropout-ab.md)
 
 ## 可选诊断
 
@@ -28,6 +28,7 @@ Markdown 文档，避免从聊天记录或旧的临时文本中复制命令。
 
 ## 已完成命令
 
+- [2026-09-26：NPU私有格式关闭/开启A/B（无收益未采纳）](2026-09-26-npu-internal-format-ab.md)
 - [2026-09-25：NPU融合AdamW匹配zero-grad重试（运行通过，收益不足未采纳）](2026-09-25-npu-fused-adamw-ab-retry.md)
 - [2026-09-24：NPU原生AdamW与融合AdamW首轮A/B（control完成，treatment接口失败）](2026-09-24-npu-fused-adamw-ab.md)
 - [2026-09-23：NPU Profile重新生成并汇总热点（已完成）](2026-09-23-npu-profile-regenerate-and-summary.md)

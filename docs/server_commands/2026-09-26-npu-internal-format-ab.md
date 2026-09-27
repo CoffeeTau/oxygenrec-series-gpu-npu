@@ -1,6 +1,6 @@
 # 2026-09-26 NPU私有格式开关A/B
 
-状态：**待执行**
+状态：**已执行并完成分析；无性能收益未采纳**
 
 目的：针对既有Profile中约`15.77%`的copy/layout kernel占比，在不改变模型结构、dropout、
 优化器或训练数据的前提下，比较TorchNPU私有格式关闭/开启的稳态训练性能。
@@ -134,3 +134,15 @@ checkpoints/performance_optimization/npu_internal_format_20260926/control_intern
 checkpoints/performance_optimization/npu_internal_format_20260926/treatment_internal_format_enabled_terminal.log
 ```
 
+## 实际结果与结论
+
+- 中位吞吐：`27206.6611 → 27075.9782 samples/s`，变化`-0.4803%`；
+- 中位step时延：`150.5514 → 151.2780 ms`；
+- CV：`0.9525% → 1.4046%`；
+- allocated memory完全相同，均为`2030521344 bytes`；
+- 两组对应repeat的loss完全一致，比较结果中三项loss中位数差均为0；
+- 两组吞吐范围高度重叠，平均吞吐差约`+0.071%`且与中位数方向相反。
+
+结论：`allow_internal_format=True`对当前训练链没有可确认收益，不采纳、不二次确认。下一轮转向
+现有Profile中占比最大的可控热点`aclnnDropoutV3`，保持dropout概率不变，只比较标准实现与
+`DropoutWithByteMask`。

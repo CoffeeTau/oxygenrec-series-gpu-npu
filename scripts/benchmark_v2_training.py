@@ -89,6 +89,12 @@ def parse_args() -> argparse.Namespace:
             "explicitly before any benchmark tensor is created"
         ),
     )
+    parser.add_argument(
+        "--npu-dropout-implementation",
+        choices=("standard", "byte_mask"),
+        default="standard",
+        help="use standard torch.nn.Dropout or the NPU-only DropoutWithByteMask",
+    )
     return parser.parse_args()
 
 
@@ -149,6 +155,28 @@ def configure_npu_internal_format(platform: str, mode: str) -> None:
     print(f"npu_internal_format={mode}", flush=True)
 
 
+def configure_npu_dropout(model, platform: str, implementation: str) -> int:
+    """Replace parameter-free Dropout modules for an NPU-only performance A/B."""
+    if implementation == "standard":
+        return 0
+    if platform != "npu":
+        raise ValueError("byte_mask dropout requires --platform npu")
+    from torch_npu.contrib.module import DropoutWithByteMask
+
+    replaced = 0
+    for name, child in tuple(model.named_children()):
+        if isinstance(child, torch.nn.Dropout):
+            setattr(
+                model,
+                name,
+                DropoutWithByteMask(p=child.p, inplace=child.inplace),
+            )
+            replaced += 1
+        else:
+            replaced += configure_npu_dropout(child, platform, implementation)
+    return replaced
+
+
 def main() -> int:
     args = parse_args()
     if args.output.exists():
@@ -170,6 +198,8 @@ def main() -> int:
         )
     if args.platform != "npu" and args.npu_internal_format != "default":
         raise ValueError("--npu-internal-format is only valid for --platform npu")
+    if args.platform != "npu" and args.npu_dropout_implementation != "standard":
+        raise ValueError("byte_mask dropout requires --platform npu")
     if args.npu_profile_dir is not None:
         if args.platform != "npu":
             raise ValueError("--npu-profile-dir requires --platform npu")
@@ -257,10 +287,22 @@ def main() -> int:
 
     runs = []
     optimizer_name = None
+    dropout_modules_replaced = None
     for batch_size in args.batch_sizes:
         for repeat in range(1, args.repeats + 1):
             seed_torch(seed, device)
             model = load_model(checkpoint, config, device)
+            replaced = configure_npu_dropout(
+                model,
+                args.platform,
+                args.npu_dropout_implementation,
+            )
+            if dropout_modules_replaced is None:
+                dropout_modules_replaced = replaced
+            elif dropout_modules_replaced != replaced:
+                raise RuntimeError("dropout replacement count changed between repeats")
+            if args.npu_dropout_implementation == "byte_mask" and replaced < 1:
+                raise RuntimeError("byte_mask treatment did not replace any Dropout modules")
             optimizer, optimizer_name = build_optimizer(
                 args.optimizer,
                 model.parameters(),
@@ -415,6 +457,10 @@ def main() -> int:
             "optimizer_state_loaded": bool(checkpoint.get("optimizer_state")),
             "zero_grad_mode": args.zero_grad_mode,
             "npu_internal_format": args.npu_internal_format,
+            "npu_dropout": {
+                "implementation": args.npu_dropout_implementation,
+                "replaced_modules": dropout_modules_replaced or 0,
+            },
             "loss_host_read_interval_steps": 1,
             "model_mode": "train",
             "configured_dropout": config.dropout,

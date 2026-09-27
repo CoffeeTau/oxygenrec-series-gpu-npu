@@ -28,6 +28,7 @@ cycle_samples="${V2_PERF_CYCLE_SAMPLES:-0}"
 optimizer="${V2_PERF_OPTIMIZER:-adamw}"
 zero_grad_mode="${V2_PERF_ZERO_GRAD_MODE:-set_to_none}"
 npu_internal_format="${V2_PERF_NPU_INTERNAL_FORMAT:-default}"
+npu_dropout_implementation="${V2_PERF_NPU_DROPOUT_IMPLEMENTATION:-standard}"
 read -r -a batch_sizes <<< "${V2_PERF_BATCH_SIZES:-64 128 256}"
 
 if [[ "$cycle_samples" != "0" && "$cycle_samples" != "1" ]]; then
@@ -48,6 +49,14 @@ if [[ "$npu_internal_format" != "default" && "$npu_internal_format" != "disable"
 fi
 if [[ "$platform" != "npu" && "$npu_internal_format" != "default" ]]; then
     echo "V2_PERF_NPU_INTERNAL_FORMAT is only valid for the npu platform" >&2
+    exit 2
+fi
+if [[ "$npu_dropout_implementation" != "standard" && "$npu_dropout_implementation" != "byte_mask" ]]; then
+    echo "V2_PERF_NPU_DROPOUT_IMPLEMENTATION must be standard or byte_mask" >&2
+    exit 2
+fi
+if [[ "$platform" != "npu" && "$npu_dropout_implementation" != "standard" ]]; then
+    echo "V2_PERF_NPU_DROPOUT_IMPLEMENTATION=byte_mask is only valid for the npu platform" >&2
     exit 2
 fi
 
@@ -73,7 +82,8 @@ command=("$python_bin" scripts/benchmark_v2_training.py \
     --repeats "$repeats" \
     --optimizer "$optimizer" \
     --zero-grad-mode "$zero_grad_mode" \
-    --npu-internal-format "$npu_internal_format")
+    --npu-internal-format "$npu_internal_format" \
+    --npu-dropout-implementation "$npu_dropout_implementation")
 if [[ "$cycle_samples" == "1" ]]; then
     command+=(--cycle-samples)
 fi
