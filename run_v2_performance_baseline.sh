@@ -30,6 +30,7 @@ zero_grad_mode="${V2_PERF_ZERO_GRAD_MODE:-set_to_none}"
 npu_internal_format="${V2_PERF_NPU_INTERNAL_FORMAT:-default}"
 npu_dropout_implementation="${V2_PERF_NPU_DROPOUT_IMPLEMENTATION:-standard}"
 loss_host_read_mode="${V2_PERF_LOSS_HOST_READ_MODE:-per_step}"
+execution_mode="${V2_PERF_EXECUTION_MODE:-eager}"
 read -r -a batch_sizes <<< "${V2_PERF_BATCH_SIZES:-64 128 256}"
 
 if [[ "$cycle_samples" != "0" && "$cycle_samples" != "1" ]]; then
@@ -64,6 +65,14 @@ if [[ "$loss_host_read_mode" != "per_step" && "$loss_host_read_mode" != "deferre
     echo "V2_PERF_LOSS_HOST_READ_MODE must be per_step or deferred" >&2
     exit 2
 fi
+if [[ "$execution_mode" != "eager" && "$execution_mode" != "torchair" ]]; then
+    echo "V2_PERF_EXECUTION_MODE must be eager or torchair" >&2
+    exit 2
+fi
+if [[ "$platform" != "npu" && "$execution_mode" != "eager" ]]; then
+    echo "V2_PERF_EXECUTION_MODE=torchair is only valid for the npu platform" >&2
+    exit 2
+fi
 
 if [[ "$platform" == "gpu" ]]; then
     device="${CUDA_DEVICE:-cuda:0}"
@@ -89,7 +98,8 @@ command=("$python_bin" scripts/benchmark_v2_training.py \
     --zero-grad-mode "$zero_grad_mode" \
     --npu-internal-format "$npu_internal_format" \
     --npu-dropout-implementation "$npu_dropout_implementation" \
-    --loss-host-read-mode "$loss_host_read_mode")
+    --loss-host-read-mode "$loss_host_read_mode" \
+    --execution-mode "$execution_mode")
 if [[ "$cycle_samples" == "1" ]]; then
     command+=(--cycle-samples)
 fi

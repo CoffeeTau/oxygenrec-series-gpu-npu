@@ -1,6 +1,6 @@
 # 2026-09-27 NPU逐step读取与延后读取loss A/B
 
-状态：**待执行**
+状态：**已执行，无稳定收益，未采纳**
 
 目的：验证训练循环每步执行`float(output.loss.detach())`所引入的主机同步是否限制NPU端到端吞吐。
 control保持历史行为，在每个计时step内读取一次loss；treatment在设备侧保留每步detach后的标量，
@@ -123,3 +123,14 @@ checkpoints/performance_optimization/npu_deferred_loss_read_20260927/file_manife
 ```
 
 如果某组失败，只回传对应的完整终端日志及已经生成的另一组JSON。
+
+## 实际结果
+
+- 中位吞吐：`27356.6887 → 27417.9353 samples/s`，仅`+0.2239%`；
+- 中位step时延：`149.7257 → 149.3913 ms`，仅减少约`0.3345 ms`；
+- CV：`0.7381% → 0.8982%`，两组均稳定，但吞吐范围高度重叠；
+- 两组allocated memory均为`2030623232 bytes`，first/last/mean loss中位数完全一致；
+- 结论：远低于预设2%门槛，不采纳，也不继续测试更多读取间隔。
+
+归档记录：
+[`2026-09-27 NPU延后loss主机读取A/B结果`](../../实验记录/案例原始记录/performance_tuning/2026-09-27-npu-deferred-loss-read-ab-result.md)

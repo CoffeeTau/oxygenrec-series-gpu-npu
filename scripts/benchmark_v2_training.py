@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Measure reproducible single-device v2 Full BF16 training throughput.
 
-The timed loop intentionally follows the production trainer, including one host
-loss read per step.  It does not save trained weights and is not a quality run.
+The benchmark can isolate selected execution and observation strategies. It does
+not save trained weights and is not a quality run.
 """
 
 from __future__ import annotations
@@ -104,6 +104,12 @@ def parse_args() -> argparse.Namespace:
             "loss materialization and finite checks until after timed device sync"
         ),
     )
+    parser.add_argument(
+        "--execution-mode",
+        choices=("eager", "torchair"),
+        default="eager",
+        help="run eagerly or compile the loss-only training forward with TorchAir",
+    )
     return parser.parse_args()
 
 
@@ -186,6 +192,43 @@ def configure_npu_dropout(model, platform: str, implementation: str) -> int:
     return replaced
 
 
+class LossOnlyTrainingModule(torch.nn.Module):
+    """Expose one Tensor output so eager and compiled arms share the same wrapper."""
+
+    def __init__(self, model) -> None:
+        super().__init__()
+        self.model = model
+
+    def forward(self, **batch):
+        loss = self.model(**batch).loss
+        if loss is None:
+            raise RuntimeError("training forward did not return a loss")
+        return loss
+
+
+def configure_execution(model, platform: str, mode: str):
+    """Return a loss-only eager module or its TorchAir-compiled equivalent."""
+    wrapped = LossOnlyTrainingModule(model)
+    if mode == "eager":
+        return wrapped, {
+            "mode": "eager",
+            "backend": None,
+            "dynamic": None,
+            "loss_only_wrapper": True,
+        }
+    if platform != "npu":
+        raise ValueError("torchair execution requires --platform npu")
+    from torch_npu.dynamo import torchair
+
+    backend = torchair.get_npu_backend()
+    return torch.compile(wrapped, backend=backend, dynamic=False), {
+        "mode": "torchair",
+        "backend": "torch_npu.dynamo.torchair.get_npu_backend",
+        "dynamic": False,
+        "loss_only_wrapper": True,
+    }
+
+
 def main() -> int:
     args = parse_args()
     if args.output.exists():
@@ -209,6 +252,8 @@ def main() -> int:
         raise ValueError("--npu-internal-format is only valid for --platform npu")
     if args.platform != "npu" and args.npu_dropout_implementation != "standard":
         raise ValueError("byte_mask dropout requires --platform npu")
+    if args.platform != "npu" and args.execution_mode != "eager":
+        raise ValueError("torchair execution requires --platform npu")
     if args.npu_profile_dir is not None:
         if args.platform != "npu":
             raise ValueError("--npu-profile-dir requires --platform npu")
@@ -297,6 +342,7 @@ def main() -> int:
     runs = []
     optimizer_name = None
     dropout_modules_replaced = None
+    execution = None
     for batch_size in args.batch_sizes:
         for repeat in range(1, args.repeats + 1):
             seed_torch(seed, device)
@@ -312,6 +358,15 @@ def main() -> int:
                 raise RuntimeError("dropout replacement count changed between repeats")
             if args.npu_dropout_implementation == "byte_mask" and replaced < 1:
                 raise RuntimeError("byte_mask treatment did not replace any Dropout modules")
+            model, repeat_execution = configure_execution(
+                model,
+                args.platform,
+                args.execution_mode,
+            )
+            if execution is None:
+                execution = repeat_execution
+            elif execution != repeat_execution:
+                raise RuntimeError("execution configuration changed between repeats")
             optimizer, optimizer_name = build_optimizer(
                 args.optimizer,
                 model.parameters(),
@@ -337,8 +392,8 @@ def main() -> int:
                     else torch.autocast(device_type=device.type, dtype=torch.bfloat16)
                 )
                 with context:
-                    output = model(**batch)
-                detached_loss = output.loss.detach()
+                    loss_tensor = model(**batch)
+                detached_loss = loss_tensor.detach()
                 if args.loss_host_read_mode == "per_step":
                     loss = float(detached_loss)
                     if not math.isfinite(loss):
@@ -346,7 +401,7 @@ def main() -> int:
                             "non-finite loss for "
                             f"batch={batch_size} repeat={repeat} step={step_index}"
                         )
-                output.loss.backward()
+                loss_tensor.backward()
                 optimizer.step()
                 return detached_loss
 
@@ -359,10 +414,12 @@ def main() -> int:
                 return values
 
             warmup_loss_tensors = []
+            warmup_started = time.perf_counter()
             for warmup_step in range(args.warmup_steps):
                 warmup_loss_tensors.append(step(warmup_step))
             synchronize(device)
             materialize_losses(warmup_loss_tensors, "warmup")
+            warmup_elapsed = time.perf_counter() - warmup_started
             reset_peak_memory_stats(device)
             synchronize(device)
             loss_tensors = []
@@ -403,6 +460,7 @@ def main() -> int:
                 "batch_size": batch_size,
                 "repeat": repeat,
                 "warmup_steps": args.warmup_steps,
+                "warmup_elapsed_seconds": warmup_elapsed,
                 "measured_steps": args.measured_steps,
                 "elapsed_seconds": elapsed,
                 "mean_step_seconds": elapsed / args.measured_steps,
@@ -491,6 +549,7 @@ def main() -> int:
                 ),
                 "post_timing_full_loss_check": True,
             },
+            "execution": execution,
             "model_mode": "train",
             "configured_dropout": config.dropout,
             "behavior_counts": dict(sorted(behavior_counts.items())),

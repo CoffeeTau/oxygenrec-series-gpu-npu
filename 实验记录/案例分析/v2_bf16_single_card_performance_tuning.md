@@ -161,3 +161,24 @@ benchmark当前每步在前向与反向之间执行`float(output.loss.detach())`
 最终设备同步仍计入两组时间，所以treatment不会把真实NPU工作挪出测量窗口；两组也都会保存并检查
 全部100个测量loss。该变量不改模型、优化器、dropout、样本顺序或loss数学定义。由于实现和数值
 风险显著低于替换优化器，预设采纳门槛调整为稳定提升至少2%；不达标即停止，不继续搜索不同读取间隔。
+
+## 13. 延后loss主机读取A/B结论
+
+延后读取的中位吞吐只从`27356.69`提高到`27417.94 samples/s`，即`+0.2239%`；中位step只减少
+约`0.3345 ms`。两组CV均低于1%，但三次repeat范围高度重叠，treatment最小值还略低于control最小值。
+allocated memory与三项loss中位数完全一致。
+
+因此这不是“低风险所以可以接受的小优化”，而是没有超出运行波动的证据。它也纠正了一个可能的
+过度归因：Profile中的534次`_local_scalar_dense`不能全部解释为benchmark里每step的一次显式loss读取。
+该路线低于预设2%门槛，不采纳、不确认，也不继续枚举读取间隔。
+
+## 14. 第四项优化决策：TorchAir图模式
+
+前三类局部优化已经给出清晰边界：优化器融合收益不足且改变数值轨迹，私有格式无收益，替换最大
+Dropout热点在ACLNN-only目标机不可用，显式loss同步也不是主要瓶颈。同时Profile中的设备耗时分散在
+Dropout、copy/layout、矩阵乘和FlashAttention，继续逐算子试开关容易退化为低价值枚举。
+
+下一轮提升优化层级：在相同loss-only wrapper上比较eager与TorchAir静态图。固定batch 4096允许
+`dynamic=False`，避免把动态shape支持混入首轮。首次编译放在100步warmup内，稳态吞吐在warmup后测量，
+同时单独记录warmup总耗时以计算编译摊销。只有稳态提升至少5%，且编译成本对长训练可摊销，才进入
+第二次性能确认和固定验证集数值复核；编译或converter不兼容则记录后停止，不转为环境安装工程。

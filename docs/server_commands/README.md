@@ -20,7 +20,7 @@ Markdown 文档，避免从聊天记录或旧的临时文本中复制命令。
 
 ## 当前命令
 
-- [2026-09-27：NPU逐step读取与延后读取loss A/B（待执行）](2026-09-27-npu-deferred-loss-read-ab.md)
+- [2026-09-27：NPU eager与TorchAir图模式训练A/B（待执行）](2026-09-27-npu-torchair-execution-ab.md)
 
 ## 可选诊断
 
@@ -28,6 +28,7 @@ Markdown 文档，避免从聊天记录或旧的临时文本中复制命令。
 
 ## 已完成命令
 
+- [2026-09-27：NPU逐step读取与延后读取loss A/B（无收益未采纳）](2026-09-27-npu-deferred-loss-read-ab.md)
 - [2026-09-26：NPU标准Dropout与ByteMask Dropout A/B（目标机不支持旧算子，未采纳）](2026-09-26-npu-byte-mask-dropout-ab.md)
 - [2026-09-26：NPU私有格式关闭/开启A/B（无收益未采纳）](2026-09-26-npu-internal-format-ab.md)
 - [2026-09-25：NPU融合AdamW匹配zero-grad重试（运行通过，收益不足未采纳）](2026-09-25-npu-fused-adamw-ab-retry.md)
