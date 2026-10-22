@@ -22,24 +22,15 @@
 | 未覆盖范围 | 多卡扩展性能、MoE、工业部署及长期训练质量收益；全 epoch 入口存在不等于完整训练质量已验收 |
 
 详细证据见[复现实验日志](实验记录/复现实验日志.md)。
-较早的[复现进度](复现进度.md)用于方法追溯，最新性能状态以实验日志和对应记录为准。
+最新性能状态以实验日志和对应记录为准。
 
 ## 代码结构说明
 
+上库内容以核心源码和实验分析记录为主：
+
 ```text
-src/oxygenrec/                 # 模型、数据、SID、解码、检索、奖励及设备适配
-scripts/                      # 数据处理、训练、验证、迁移和性能工具
-tests/                        # 单元测试与结果契约测试
-configs/assumptions.yaml       # 公开代理协议及实现假设
-docs/                         # 数据/模型协议与迁移说明
-docs/server_commands/         # 完整服务器执行步骤及产物路径
-实验记录/                     # 经审查允许留存的实验记录与分析
-run_npu_stage0.sh              # NPU 环境与单卡功能检查
-run_v2_training.sh            # 短训练及 checkpoint 重载验证
-run_v2_validation.sh          # 固定验证集评测
-run_v2_full_training.sh       # 从已有 checkpoint 继续全 epoch 训练
-run_v2_performance_baseline.sh # 单卡稳态训练性能测试
-run_v2_npu_profile.sh         # NPU 算子性能采集
+src/oxygenrec/   # 模型、数据处理、SID、解码、检索、奖励及设备适配
+实验记录/       # 经审查允许留存的实验过程、结果分析和结论
 ```
 
 主线数据流：
@@ -49,72 +40,232 @@ run_v2_npu_profile.sh         # NPU 算子性能采集
         → Encoder-Decoder → 受约束 SID 生成 → 商品候选与推荐指标
 ```
 
-调用链见[代码阅读与数据流指南](代码阅读与数据流指南.md)。
+## 环境与输入要求
 
-## 运行环境准备
+- GPU：已有验证设备为 NVIDIA L20，使用与 CUDA 兼容的 PyTorch。
+- NPU：已有验证设备为 Ascend 950DT，使用配套的驱动、固件、CANN、PyTorch 和 torch_npu。
+- Qwen 可选路径：需匹配的 Transformers 环境及模型权重，用于指令生成和特征缓存。
+- 输入资产：RetailRocket 事件数据、与模型词表一致的 SID registry，以及相应 checkpoint；均需在服务器内按批准流程准备，不随代码提供。
 
-| 环境 | 用途 | 准备要求 |
-| --- | --- | --- |
-| 本地 Python / CPU | 基础测试与静态检查 | 标准库可运行基础测试；PyTorch 相关测试需相应依赖，跳过不代表通过 |
-| NVIDIA GPU | 方法验证、迁移参考与基线 | 已有验证设备为 L20，使用与服务器 CUDA 兼容的 PyTorch |
-| 昇腾 NPU | 训练迁移与性能调优 | 已有验证设备为 Ascend 950DT，使用配套驱动、固件、CANN、PyTorch 和 torch_npu |
-| Qwen 可选路径 | 指令生成与特征缓存 | 另需匹配的 Transformers 环境及 Qwen 权重，不属于每轮性能测试的在线依赖 |
+不同实验轮次的软件环境和配置可能不同，复测须按对应[实验记录](实验记录/复现实验日志.md)
+核对版本、输入及计时协议。
 
-本仓库采用源码脚本入口，目前没有统一安装包或锁定依赖文件，不使用 `pip install -e .`。
-应在经批准的服务器环境中运行，不按其他示例覆盖安装软件栈。
-不同轮次存在不同环境版本，复测须记录实际版本，不把早期快照当作全部实验的统一配置。
+## 快速运行
 
-- [服务器环境索引](docs/server_environment.md)
-- [NPU 迁移计划](docs/npu_migration_plan.md)
-- [Qwen 服务器接入操作指南](Qwen服务器接入操作指南.md)
+### 1. 保留运行入口并准备环境
 
-基础测试在仓库根目录执行：
+目录介绍只突出核心内容。为保留数据重建、训练、验证和性能测试能力，交付时还须保留
+`README.md`、`.gitignore` 及以下入口（相对路径不变）：
+
+| 用途 | 必留文件 |
+| --- | --- |
+| 模型自检 | `scripts/validate_toy_model.py` |
+| SID 与预训练资产重建 | `scripts/fit_retailrocket_sid.py`、`scripts/train_v2_pretraining_ablation_retailrocket.py`、`scripts/train_v2_listwise_retailrocket.py`（被预训练入口导入） |
+| 短训练 | `run_v2_training.sh`、`scripts/train_v2_full_migration_smoke.py`（也被续训、性能入口导入） |
+| 固定验证 | `run_v2_validation.sh`、`scripts/evaluate_v2_fixed_validation.py` |
+| 全 epoch 续训 | `run_v2_full_training.sh`、`scripts/train_v2_full_epochs.py` |
+| 稳态性能与比较 | `run_v2_performance_baseline.sh`、`scripts/benchmark_v2_training.py`、`scripts/compare_v2_performance_baselines.py` |
+| NPU Profile 与汇总 | `run_v2_npu_profile.sh`、`scripts/summarize_v2_npu_profile.py` |
+
+`src/oxygenrec/` 整包保留，测试目录建议保留用于回归。训练、验证和性能入口要求已知 Git
+提交且已跟踪文件无修改；整理后应在目标代码库提交，再从干净工作树运行，无需迁入旧 Git 历史。
+
+先进入仓库根目录，激活已配置好 PyTorch 的服务器 Python 环境。NPU 还需加载 CANN 环境；
+以下为常见安装路径，若服务器路径不同，应按实际安装位置修改，不要重新安装或覆盖系统软件栈。
 
 ```bash
-python3 -m unittest discover -s tests -v
+# 仅 NPU 环境执行
+source /usr/local/Ascend/driver/bin/setenv.bash
+source /usr/local/Ascend/cann/set_env.sh
+python -c "import torch, torch_npu; print('torch=', torch.__version__); print('torch_npu=', torch_npu.__version__); assert torch.npu.is_available()"
 ```
 
-测试通过仅代表当前环境覆盖的检查通过，不代替目标 GPU/NPU 验证。
+GPU 环境执行：
 
-## 数据与模型准备
+```bash
+python -c "import torch; print('torch=', torch.__version__); print('cuda=', torch.version.cuda); assert torch.cuda.is_available()"
+```
 
-仓库不分发数据、权重和运行产物。服务器执行前须准备：
+项目使用源码脚本运行，无需 `pip install -e .`。GPU 和 NPU 的 PyTorch 安装包不能混用；
+NPU 的 PyTorch、torch_npu、CANN 必须使用配套版本。基础模型运行无需加载 Qwen，
+只有指令生成/特征缓存路径需要额外的 Transformers 和 Qwen 权重。
 
-| 资产 | 脚本默认路径 | 要求 |
-| --- | --- | --- |
-| RetailRocket 事件数据 | `data/raw/retailrocket/events.csv` | 在服务器内按批准流程准备，遵循时间切分及防泄漏协议 |
-| SID registry | `data/processed/rq_comparison/w256_kmeanspp/sid_registry.json` | 与 checkpoint 的词表、层数和版本一致 |
-| v2 Full checkpoint | `checkpoints/retailrocket_v2_pretraining_ablation_smoke/full-epoch-1.pt` | 迁移、验证和性能脚本的默认输入，不随代码提供 |
+### 2. 无数据模型自检（可选）
 
-默认路径不是自动下载入口。缺少 registry/checkpoint 时，应先完成数据处理、SID 拟合和对应
-v2 预训练，不能直接运行后续性能测试，也不能用随机资产替代固定对齐输入。
+尚未准备真实数据时，可先用合成输入检查模型前向、反向、checkpoint 和解码：
 
-数据和训练流程见[数据协议](docs/data_protocol.md)、[SID 协议](docs/sid_protocol.md)、
-[模型协议](docs/model_protocol.md)、[训练协议](docs/training_protocol.md)。
+```bash
+python scripts/validate_toy_model.py --device cpu --steps 200
+```
 
-常用路径变量为 `EVENTS_PATH`、`SID_REGISTRY_PATH`。
-短训练/验证使用 `V2_FULL_CHECKPOINT`，全 epoch/性能入口使用 `V2_FULL_TRAIN_CHECKPOINT`；
-两者名称不同，请按具体入口配置。
+该命令不需要 RetailRocket 数据或已有 checkpoint，不代表 v2 Full 或 NPU 迁移验证通过。
 
-## 运行方式与结果路径
+### 3. 数据下载、处理与 checkpoint 准备
 
-以下为入口速查，不是要求逐项连续执行。完成输入准备后，按
-[服务器执行命令索引](docs/server_commands/README.md)中的完整步骤运行。
-每轮指定独立输出目录，避免覆盖旧结果；不要将早期 `tmp_command.txt` 当作当前执行入口。
+**数据不需要上库。** 如已删除原始文件，在经批准的服务器内从
+[RetailRocket 官方数据页](https://www.kaggle.com/datasets/retailrocket/ecommerce-dataset)
+重新下载并解压。数据页标注为 CC BY-NC-SA 4.0，企业使用前应确认用途符合数据许可和组织要求。
+使用已安装并完成授权的 Kaggle CLI 时，可执行以下命令；凭据不得写入仓库：
 
-| 任务 | 根目录入口 | 默认输出位置 |
-| --- | --- | --- |
-| NPU 单卡检查 | `bash run_npu_stage0.sh` | `checkpoints/npu_stage0/` |
-| GPU 短训练 | `bash run_v2_training.sh gpu bf16` | `checkpoints/device_training/v2_full/gpu/bf16/` |
-| NPU 短训练 | `bash run_v2_training.sh npu bf16` | `checkpoints/device_training/v2_full/npu/bf16/` |
-| NPU 固定验证 | `bash run_v2_validation.sh npu bf16` | `checkpoints/device_validation/v2_full/npu/bf16/` |
-| NPU 全 epoch 续训 | `bash run_v2_full_training.sh npu bf16` | `checkpoints/full_training/v2_full/npu/bf16/` |
-| NPU 稳态基线 | `bash run_v2_performance_baseline.sh npu bf16` | `checkpoints/performance_baseline/v2_full/npu_bf16_performance.json` |
+```bash
+mkdir -p data/raw/retailrocket
+kaggle datasets download -d retailrocket/ecommerce-dataset -p data/raw/retailrocket --unzip
+```
 
-训练、验证和性能入口支持 `gpu`/`npu`，精度支持 `fp32`/`bf16`；验证还支持 `all`。
-`PYTHON_BIN` 指定解释器，`CUDA_DEVICE`/`NPU_DEVICE` 指定设备。
-上表采用脚本默认参数，**不等同于历史 batch4096 匹配实验配置**。
-预热、计时、样本循环、重复次数、Profile 配置及完整结果文件路径，以对应日期命令文档为准。
+无法联网的服务器须使用批准的数据导入流程。处理入口需要 `events.csv`、
+`item_properties_part1.csv` 和 `item_properties_part2.csv`；下载包中的 `category_tree.csv`
+不是本轮 SID 拟合的必需输入。保留 CSV 原始列结构，无需手工随机切分。
+
+**如果只删除原始数据、仍保留匹配的 registry 和 checkpoint，恢复 CSV 后直接使用下方路径配置，
+不要重新拟合 SID。** 如果连处理结果和 checkpoint 都没有了，按以下顺序重建一套功能验证资产
+（示例在 GPU 上运行；仅有 NPU 时可用 CPU 拟合 SID，但耗时更长）：
+
+```bash
+# NumPy 用于属性向量处理；需与已有 PyTorch 环境配套安装。
+python -c "import numpy, torch"
+
+python scripts/fit_retailrocket_sid.py --device cuda:0 --max-items 5000 --width 256 --initialization kmeans++ --output-dir data/processed/rebuilt_sid
+python scripts/train_v2_pretraining_ablation_retailrocket.py --device cuda:0 --events data/raw/retailrocket/events.csv --sid-registry data/processed/rebuilt_sid/sid_registry.json --output-dir checkpoints/rebuilt_v2_pretraining --epochs 1 --max-train-samples 5000
+```
+
+SID 入口按全局时间跨度划分 80%/10%/10%，只选训练期商品，并使用训练截止时间前的属性构建
+哈希向量和三层残差 K-means 编码；训练入口自动构建历史及每日列表样本。属性哈希是公开代理，
+不等于论文工业语义特征。预训练入口会运行 `base`、`ib`、`full` 三组，并生成
+`checkpoints/rebuilt_v2_pretraining/full-epoch-1.pt`。
+重建是小规模功能流程，不保证复现历史结果或达到充分训练质量。不要混用新 registry 与旧 checkpoint，
+GPU/NPU 比较必须使用同一套批准的资产。重复重建时换一个输出目录，保留旧结果。
+
+重建后配置：
+
+```bash
+export PYTHON_BIN=python
+export EVENTS_PATH=data/raw/retailrocket/events.csv
+export SID_REGISTRY_PATH=data/processed/rebuilt_sid/sid_registry.json
+export V2_FULL_CHECKPOINT=checkpoints/rebuilt_v2_pretraining/full-epoch-1.pt
+export V2_FULL_TRAIN_CHECKPOINT="$V2_FULL_CHECKPOINT"
+```
+
+仅有 NPU 时，SID 拟合命令使用 `--device cpu`，预训练命令使用 `--device npu:0`；这条组合需在
+目标环境验证。本节没有执行下载、处理或训练。
+
+**已有历史资产时，使用下面这组配置替代上面的重建路径，二选一：**
+
+以下默认路径对应现有 v2 Full 实验资产，请修改为服务器内的实际位置。
+这些文件不随代码提供；缺少资产时，须先完成 SID 拟合和 v2 预训练，不能用合成自检的
+checkpoint 替代。下面的训练命令是从已有 v2 Full checkpoint 恢复，而不是从零预训练。
+
+```bash
+export PYTHON_BIN=python
+export EVENTS_PATH=data/raw/retailrocket/events.csv
+export SID_REGISTRY_PATH=data/processed/rq_comparison/w256_kmeanspp/sid_registry.json
+export V2_FULL_CHECKPOINT=checkpoints/retailrocket_v2_pretraining_ablation_smoke/full-epoch-1.pt
+export V2_FULL_TRAIN_CHECKPOINT="$V2_FULL_CHECKPOINT"
+
+# 三项均应检查通过；缺失时先准备资产，不继续执行训练。
+test -f "$EVENTS_PATH" && test -f "$SID_REGISTRY_PATH" && test -f "$V2_FULL_CHECKPOINT"
+```
+
+### 4. 运行短训练和固定验证
+
+下面以单卡 NPU、BF16 为例。短训练默认执行 20 步并检查 checkpoint 重载；
+固定验证评测上一步配置的输入 checkpoint，**不是自动评测短训练输出的 checkpoint**。
+所有代码块在同一终端按顺序执行。
+
+```bash
+export NPU_DEVICE=npu:0
+export OXYGENREC_RUN_ROOT="checkpoints/quickstart/$(date +%Y%m%d_%H%M%S)"
+export V2_TRAINING_ROOT="$OXYGENREC_RUN_ROOT/training"
+export V2_VALIDATION_ROOT="$OXYGENREC_RUN_ROOT/validation"
+
+bash run_v2_training.sh npu bf16 && bash run_v2_validation.sh npu bf16
+```
+
+GPU 运行时，将上面两条启动命令的 `npu` 改为 `gpu`，并设置 `CUDA_DEVICE=cuda:0`；
+需要 FP32 时将 `bf16` 改为 `fp32`。结果仅在服务器内查看：
+
+| 结果 | 路径（相对于本轮 `OXYGENREC_RUN_ROOT`） |
+| --- | --- |
+| NPU 短训练日志及结果 | `training/npu/bf16/`，终端日志为 `training.log` |
+| NPU 固定验证摘要 | `validation/npu/bf16/v2_full_npu_bf16_validation_summary.json` |
+| NPU 固定验证日志 | `validation/npu/bf16/validation.log` |
+
+GPU 对应路径中的 `npu` 替换为 `gpu`；FP32 对应路径中的 `bf16` 替换为 `fp32`。
+
+### 5. 继续训练一个 epoch（可选）
+
+短训练和固定验证通过后，按需运行。下面仍从 `V2_FULL_TRAIN_CHECKPOINT` 指定的 checkpoint
+开始，默认 batch 为 64；完整数据训练的耗时和资源需求高于短训练。
+
+```bash
+export V2_FULL_TRAIN_OUTPUT_ROOT="$OXYGENREC_RUN_ROOT/full_training"
+export V2_FULL_TRAIN_EPOCHS=1
+export V2_FULL_TRAIN_BATCH_SIZE=64
+bash run_v2_full_training.sh npu bf16
+```
+
+日志、epoch checkpoint 和摘要保存在本轮目录下的 `full_training/npu/bf16/`。
+这些快速运行命令用于功能验证和续训，不等同于下表 batch4096 的性能测试协议。
+
+### 6. 单卡性能测试与 GPU/NPU 比较
+
+先完成第 3 节输入配置，并确认代码已提交、工作树干净。以下公共配置需在 GPU/NPU 两侧分别设置；
+两侧使用相同 commit、数据、registry 和 checkpoint，不要各自重新训练一份权重。
+
+```bash
+export V2_PERF_OUTPUT_ROOT="checkpoints/performance_baseline/manual_$(date +%Y%m%d_%H%M%S)"
+export V2_PERF_BATCH_SIZES=4096
+export V2_PERF_MAX_SAMPLES=130000
+export V2_PERF_WARMUP_STEPS=100
+export V2_PERF_MEASURED_STEPS=100
+export V2_PERF_REPEATS=3
+export V2_PERF_CYCLE_SAMPLES=1
+export V2_PERF_OPTIMIZER=adamw
+export V2_PERF_ZERO_GRAD_MODE=set_to_none
+export V2_PERF_NPU_INTERNAL_FORMAT=default
+export V2_PERF_NPU_DROPOUT_IMPLEMENTATION=standard
+export V2_PERF_LOSS_HOST_READ_MODE=per_step
+export V2_PERF_EXECUTION_MODE=eager
+```
+
+按服务器类型选择一条执行：
+
+```bash
+# GPU 服务器
+CUDA_DEVICE=cuda:0 bash run_v2_performance_baseline.sh gpu bf16
+```
+
+```bash
+# NPU 服务器
+NPU_DEVICE=npu:0 bash run_v2_performance_baseline.sh npu bf16
+```
+
+结果分别为本轮 `V2_PERF_OUTPUT_ROOT` 下的 `gpu_bf16_performance.json` 和
+`npu_bf16_performance.json`。该配置循环使用样本，避免预热和测量步数超过可用样本量；
+若可用样本不足一个 batch，两侧同时降低 batch 并如实记录，不与历史 batch4096 直接比较。
+
+将两份摘要放在经批准的内部可访问位置后，替换下面路径，在服务器内比较：
+
+```bash
+python scripts/compare_v2_performance_baselines.py /approved/path/gpu_bf16_performance.json /approved/path/npu_bf16_performance.json
+```
+
+比较结果打印到终端；比较器检查输入、workload、源码哈希和 commit。不满足内部流转权限时，
+保留各侧结果，不将文件转至外部系统。新资产产生的是新基线，不保证得到下表历史倍率。
+
+### 7. NPU 算子 Profile（按需）
+
+沿用第 3 节输入配置，单独采集短窗口，不与无 Profile 的吞吐结果混比：
+
+```bash
+export V2_PROFILE_OUTPUT_ROOT="checkpoints/performance_profiling/manual_$(date +%Y%m%d_%H%M%S)"
+export V2_PROFILE_BATCH_SIZE=4096
+export NPU_DEVICE=npu:0
+bash run_v2_npu_profile.sh
+python scripts/summarize_v2_npu_profile.py "$V2_PROFILE_OUTPUT_ROOT" --output "$V2_PROFILE_OUTPUT_ROOT/profile_hotspots.json" --top-k 30
+```
+
+本轮目录下，`npu_bf16_profile_summary.json` 为运行摘要，`trace/` 为采集产物，
+`profile_hotspots.json` 为算子与 kernel 热点汇总，终端也打印排名；全部留在服务器内分析。
 
 ## 精度、性能对比
 
@@ -168,16 +319,3 @@ CV 是标准差与均值的比值，反映重复运行的相对波动；重复�
 详细结果按权限在服务器内查看，实验使用
 [性能调优记录模板](实验记录/性能调优记录模板.md)，无收益和失败尝试同样保留。
 
-## 数据安全与交付边界
-
-服务器数据、终端输出、日志、JSON/CSV、Profile trace、样例及模型权重仅在服务器内查看、
-分析和留存，不得传至个人电脑、外部聊天工具或未经授权的系统。
-GPU/NPU 间的参考包流转也必须在经批准的内部环境和权限范围内进行。
-
-匿名化或仅保留聚合指标不等于获得外发授权。历史实验文档与环境快照须单独审查后才能进入
-目标代码库；忽略规则不代替交付检查，不直接打包整个工作目录或未经审查迁入完整 Git 历史。
-代码规模及交付注意事项见[上库评审说明](docs/2026-10-22-code-intake-review.md)。
-
-## 参考资料
-
-- 方法与工程假设：[实现假设](configs/assumptions.yaml)、[复用调研](docs/reference_reuse.md)。
