@@ -101,7 +101,7 @@ find "$AB_ROOT" -type f | sort | tee "$AB_ROOT/file_manifest.txt"
 checkpoints/performance_optimization/npu_internal_format_20260926/
 ```
 
-执行成功后，请回传以下三个文件：
+执行成功后，请在服务器内查看以下三个文件：
 
 ```text
 checkpoints/performance_optimization/npu_internal_format_20260926/comparison.json
@@ -109,7 +109,7 @@ checkpoints/performance_optimization/npu_internal_format_20260926/control_intern
 checkpoints/performance_optimization/npu_internal_format_20260926/treatment_internal_format_enabled/npu_bf16_performance.json
 ```
 
-服务器留存、首轮无需回传：
+服务器内留存备查：
 
 ```text
 checkpoints/performance_optimization/npu_internal_format_20260926/comparison.txt
@@ -122,13 +122,13 @@ checkpoints/performance_optimization/npu_internal_format_20260926/npu_smi_after.
 checkpoints/performance_optimization/npu_internal_format_20260926/file_manifest.txt
 ```
 
-如果control失败，只回传：
+如果control失败，只在服务器内查看：
 
 ```text
 checkpoints/performance_optimization/npu_internal_format_20260926/control_internal_format_disabled_terminal.log
 ```
 
-如果treatment失败，只回传：
+如果treatment失败，只在服务器内查看：
 
 ```text
 checkpoints/performance_optimization/npu_internal_format_20260926/treatment_internal_format_enabled_terminal.log

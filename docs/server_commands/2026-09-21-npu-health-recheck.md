@@ -36,7 +36,7 @@ npu-smi info -t usages -i 6 | tee "$RESULT_DIR/npu6_usages.txt"
 
 ## 2. 停止点
 
-执行完成后暂停，不要执行 reset、清理显存、结束其他用户进程或继续正式 Profile。请回传：
+执行完成后暂停，不要执行 reset、清理显存、结束其他用户进程或继续正式 Profile。请在服务器内查看：
 
 - 终端完整输出；
 - `npu0_chip0_health.txt` 与 `npu6_chip0_health.txt`；

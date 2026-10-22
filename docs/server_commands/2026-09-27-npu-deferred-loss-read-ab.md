@@ -101,7 +101,7 @@ find "$AB_ROOT" -type f | sort | tee "$AB_ROOT/file_manifest.txt"
 checkpoints/performance_optimization/npu_deferred_loss_read_20260927/
 ```
 
-执行成功后，请回传：
+执行成功后，请在服务器内查看：
 
 ```text
 checkpoints/performance_optimization/npu_deferred_loss_read_20260927/comparison.json
@@ -109,7 +109,7 @@ checkpoints/performance_optimization/npu_deferred_loss_read_20260927/control_per
 checkpoints/performance_optimization/npu_deferred_loss_read_20260927/treatment_deferred_loss_read/npu_bf16_performance.json
 ```
 
-服务器留存、首轮无需回传：
+服务器内留存备查：
 
 ```text
 checkpoints/performance_optimization/npu_deferred_loss_read_20260927/comparison.txt
@@ -122,7 +122,7 @@ checkpoints/performance_optimization/npu_deferred_loss_read_20260927/npu_smi_aft
 checkpoints/performance_optimization/npu_deferred_loss_read_20260927/file_manifest.txt
 ```
 
-如果某组失败，只回传对应的完整终端日志及已经生成的另一组JSON。
+如果某组失败，只在服务器内查看对应的完整终端日志及已经生成的另一组JSON。
 
 ## 实际结果
 

@@ -13,7 +13,7 @@
 经过`OxygenRECModel.forward()`、`_behavior_instruction_prompt()`与
 `behavior_instruction_adapter`内的Dropout时失败，未进入100步正式测量，未生成treatment JSON。
 
-本次回传没有包含control JSON的聚合数值，因此不从终端局部截图补造性能结果。
+本次记录没有包含control JSON的聚合数值，因此不从终端局部记录补造性能结果。
 
 ## 2. 原始关键报错
 

@@ -83,7 +83,7 @@ find "$AB_ROOT" -type f | sort | tee "$AB_ROOT/file_manifest.txt"
 融合版本吞吐至少提高5%且无稳定性、loss或显存异常时，再进入一次独立确认；否则保留负结果并
 转向layout/copy优化。
 
-## 回传结果
+## 在服务器内查看结果
 
 成功时返回：
 
@@ -104,7 +104,7 @@ find "$AB_ROOT" -type f | sort | tee "$AB_ROOT/file_manifest.txt"
 checkpoints/performance_optimization/npu_fused_adamw_zero_grad_20260925/
 ```
 
-需要回传分析的文件：
+需要在服务器内分析的文件：
 
 ```text
 checkpoints/performance_optimization/npu_fused_adamw_zero_grad_20260925/comparison.json
@@ -112,7 +112,7 @@ checkpoints/performance_optimization/npu_fused_adamw_zero_grad_20260925/control_
 checkpoints/performance_optimization/npu_fused_adamw_zero_grad_20260925/treatment_npu_fused_adamw/npu_bf16_performance.json
 ```
 
-服务器保留、目前无需回传的文件：
+服务器内留存备查的文件：
 
 ```text
 checkpoints/performance_optimization/npu_fused_adamw_zero_grad_20260925/comparison.txt

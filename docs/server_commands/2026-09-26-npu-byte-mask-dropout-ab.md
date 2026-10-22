@@ -100,7 +100,7 @@ find "$AB_ROOT" -type f | sort | tee "$AB_ROOT/file_manifest.txt"
 checkpoints/performance_optimization/npu_byte_mask_dropout_20260926/
 ```
 
-执行成功后，请回传：
+执行成功后，请在服务器内查看：
 
 ```text
 checkpoints/performance_optimization/npu_byte_mask_dropout_20260926/comparison.json
@@ -108,7 +108,7 @@ checkpoints/performance_optimization/npu_byte_mask_dropout_20260926/control_stan
 checkpoints/performance_optimization/npu_byte_mask_dropout_20260926/treatment_byte_mask_dropout/npu_bf16_performance.json
 ```
 
-服务器留存、首轮无需回传：
+服务器内留存备查：
 
 ```text
 checkpoints/performance_optimization/npu_byte_mask_dropout_20260926/comparison.txt
@@ -121,11 +121,11 @@ checkpoints/performance_optimization/npu_byte_mask_dropout_20260926/npu_smi_afte
 checkpoints/performance_optimization/npu_byte_mask_dropout_20260926/file_manifest.txt
 ```
 
-如果某组失败，只回传对应的完整终端日志。
+如果某组失败，只在服务器内查看对应的完整终端日志。
 
 ## 2026-09-27 实际结果
 
-- control通过结果文件存在性检查后进入treatment；本次截图没有包含control聚合数值，因此不补写数值；
+- control通过结果文件存在性检查后进入treatment；本次记录没有包含control聚合数值，因此不补写数值；
 - treatment在第一个warmup前向经过`behavior_instruction_adapter`中的Dropout时失败，尚未进入正式测量；
 - `DropoutWithByteMask`调用已弃用的`dropout_with_byte_mask`，运行时明确报告当前设备只支持
   ACLNN算子，而该旧算子没有ACLNN实现，并返回`ERR00007 PTA feature not supported`；

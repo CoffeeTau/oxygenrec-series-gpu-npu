@@ -2,7 +2,7 @@
 
 状态：**已被2026-09-23重新采集与汇总命令替代**
 
-目的：直接解析已经生成的 `operator_details.csv` 和 `kernel_details.csv`，输出可回传的小型热点
+目的：直接解析已经生成的 `operator_details.csv` 和 `kernel_details.csv`，输出供服务器内分析的小型热点
 摘要。本步骤不重跑训练、不重跑Profiler。
 
 ## NPU服务器：可整段复制
@@ -20,7 +20,7 @@ python scripts/summarize_v2_npu_profile.py \
   2>&1 | tee "$PROFILE_ROOT/profile_hotspots.txt"
 ```
 
-## 回传结果
+## 在服务器内查看结果
 
 只需要提供：
 

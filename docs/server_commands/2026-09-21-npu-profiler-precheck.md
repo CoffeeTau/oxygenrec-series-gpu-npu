@@ -34,7 +34,7 @@ npu-smi info
 ## 3. 停止点
 
 执行到这里后暂停，不要自行安装或升级 `torch`、`torch_npu`、CANN 或 MindStudio。
-请回传两条 Python 命令和 `npu-smi info` 的完整服务器运行结果。确认 API 形态后，下一份
+请在服务器内查看两条 Python 命令和 `npu-smi info` 的完整服务器运行结果。确认 API 形态后，下一份
 命令文档将给出 batch 4096 的短窗口 Profile 采集命令。
 
 结果记录：

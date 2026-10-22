@@ -52,7 +52,7 @@ find "$PROFILE_ROOT" -type f | sort | tee "$PROFILE_ROOT/file_manifest.txt"
 OK training_profile output=checkpoints/performance_profiling/npu_bs4096_short_20260921/npu_bf16_profile_summary.json
 ```
 
-执行后暂停，优先提供以下最小结果集合：
+执行后暂停，在服务器内优先查看以下结果集合：
 
 1. `terminal.log`；
 2. `npu_bf16_profile_summary.json`；
@@ -60,9 +60,8 @@ OK training_profile output=checkpoints/performance_profiling/npu_bs4096_short_20
 4. trace目录中的 `operator_details*.csv`；
 5. trace目录中的 `kernel_details*.csv`。
 
-`trace_view*.json`、完整trace目录以及运行前后的两个`npu_smi`文件先保留在服务器，不需要首轮
-回传。只有CSV缺失、时间关联不清楚或发现异常等待时，再进一步读取这些大文件。如果运行失败，
-只需先提供完整`terminal.log`和当时已经生成的`file_manifest.txt`。
+`trace_view*.json`、完整trace目录以及运行前后的两个`npu_smi`文件先保留在服务器，仅在服务器内按需查看。只有CSV缺失、时间关联不清楚或发现异常等待时，再进一步读取这些大文件。如果运行失败，
+只需在服务器内先查看完整`terminal.log`和当时已经生成的`file_manifest.txt`。
 
 不要先手工筛选“看起来慢”的算子，也不要删除没有性能提升的原始输出。下一步直接根据
 operator/kernel统计选择第一个收益最大的A/B优化点。

@@ -66,7 +66,7 @@ OK profile_summary output=checkpoints/performance_profiling/npu_bs4096_short_reg
 - `profile_hotspots.txt`；
 - `profile_hotspots.json`。
 
-## 回传结果
+## 在服务器内查看结果
 
 只需要返回：
 
@@ -74,7 +74,7 @@ OK profile_summary output=checkpoints/performance_profiling/npu_bs4096_short_reg
 2. `profile_hotspots.json`；
 3. 如果命令失败，则改为返回完整的`terminal.log`和报错位置。
 
-原始CSV、trace、运行摘要与前后`npu-smi`继续保留在服务器，不需要首轮全部回传。
+原始CSV、trace、运行摘要与前后`npu-smi`继续保留在服务器，仅在服务器内按需查看。
 
 ## 完成结果
 

@@ -113,7 +113,7 @@ find "$AB_ROOT" -type f | sort | tee "$AB_ROOT/file_manifest.txt"
 checkpoints/performance_optimization/npu_torchair_execution_20260927/
 ```
 
-执行成功后，请回传：
+执行成功后，请在服务器内查看：
 
 ```text
 checkpoints/performance_optimization/npu_torchair_execution_20260927/comparison.json
@@ -121,7 +121,7 @@ checkpoints/performance_optimization/npu_torchair_execution_20260927/control_eag
 checkpoints/performance_optimization/npu_torchair_execution_20260927/treatment_torchair/npu_bf16_performance.json
 ```
 
-服务器留存、首轮无需回传：
+服务器内留存备查：
 
 ```text
 checkpoints/performance_optimization/npu_torchair_execution_20260927/torchair_import_precheck.log
@@ -135,5 +135,5 @@ checkpoints/performance_optimization/npu_torchair_execution_20260927/npu_smi_aft
 checkpoints/performance_optimization/npu_torchair_execution_20260927/file_manifest.txt
 ```
 
-若导入预检失败，只回传`torchair_import_precheck.log`。若treatment失败，回传
+若导入预检失败，只在服务器内查看`torchair_import_precheck.log`。若treatment失败，在服务器内查看
 `treatment_torchair_terminal.log`和已生成的control JSON。

@@ -78,7 +78,7 @@ find "$AB_ROOT" -type f | sort | tee "$AB_ROOT/file_manifest.txt"
 - treatment失败：不回退或删除日志，先依据错误判断是checkpoint state兼容还是算子支持问题；
 - treatment明显变慢：停止该路线，不尝试用`capturable=True`强行补救。
 
-## 回传结果
+## 在服务器内查看结果
 
 成功时只需返回：
 
