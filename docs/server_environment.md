@@ -15,7 +15,7 @@ Python environment that will train OxygenREC:
 python collect_server_env.py --output oxygenrec_server_env.json
 ```
 
-Return `oxygenrec_server_env.json`. The report contains:
+Inspect and retain `oxygenrec_server_env.json` on the server only. The report contains:
 
 - operating system, CPU count, and host-memory summary;
 - Python executable and version;
@@ -28,5 +28,5 @@ Return `oxygenrec_server_env.json`. The report contains:
 
 The script does not collect arbitrary environment variables, API keys, SSH
 configuration, usernames, hostnames, GPU UUIDs, source code, or training data.
-Review the JSON before sending it if the server has additional confidentiality
-requirements.
+Do not transfer this report to personal computers, external chat tools, or
+unauthorized systems. Follow the organization's data-handling requirements.
